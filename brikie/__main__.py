@@ -17,8 +17,8 @@ from brikie.kernel.state import StateManager
 # Brick imports — resolved once companion modules are built
 # ---------------------------------------------------------------------------
 
-from brikie.bricks.interface.cli import CliInterfaceBrick
-from brikie.bricks.provider.http_provider import HttpProviderBrick
+from brikie.bricks.interface.cli import CLIBrick
+from brikie.bricks.provider.http_provider import HTTPProvider
 from brikie.bricks.tool.dummy import DummyToolBrick
 
 
@@ -40,7 +40,7 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--base-url",
-        default="https://api.openai.com/v1/chat/completions",
+        default="https://api.openai.com/v1",
         help="Base URL for the provider (default: OpenAI)",
     )
     return parser.parse_args(argv)
@@ -140,12 +140,12 @@ async def main() -> None:
     hooks = HookDispatcher()
 
     # Create bricks
-    provider = HttpProviderBrick(
+    provider = HTTPProvider(
         model=args.model,
         api_key=args.api_key,
         base_url=args.base_url,
     )
-    interface = CliInterfaceBrick()
+    interface = CLIBrick()
     tool = DummyToolBrick()
 
     # Register bricks
