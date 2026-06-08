@@ -1,71 +1,68 @@
 # Brikie — Session Handover
 
 **Date**: June 8, 2026
-**Session ID**: `ses_5e087624670234531070`
+**Session ID**: `ses_1580330c5ffeVDUgTRI0fALGJk`
 **Agent**: Sisyphus
 
 ## Goal
-- Implement Phase 3 LCM Brick (Lossless Context Management) with SQLite database, store, brick wrapper, retrieval tools, and tests
-- Wire LCM into event loop hooks (PRE_LLM/POST_LLM)
-- Update exports and run full test suite
+- Implement Phase 3.2 MemPalace Brick (spatial/temporal graph with ChromaDB + SQLite)
+- Implement Phase 3.3 LLM Wiki Brick (Markdown directory as codebase)
+- Wire all Memory Bricks into event loop hooks
+- Full test suite with zero regressions
 
 ## Constraints & Preferences
-- Follow design.md Phase 3.1 specification exactly
-- SQLite with WAL mode, append-only immutable message store
-- Strict try/finally blocks for all database connections
-- Integration with Baseplate PRE_LLM and POST_LLM hooks
+- Follow design.md Phase 3 specification exactly
+- SQLite WAL mode, try/finally on all connections
+- MemoryBrick + ToolBrick dual inheritance (MemPalace pattern)
+- Bricks are optional/hot-swappable — `memory/__init__.py` exports only MemoryBrick ABC
+- OpenAI function tool schemas in tools.py
 
 ## Progress
 
-### Completed
-- ✅ `brikie/bricks/memory/lcm/schema.sql` — SQLite schema with WAL mode
-- ✅ `brikie/bricks/memory/lcm/lcm_store.py` — LcmStore + LcmConnectionPool
-- ✅ `brikie/bricks/memory/lcm/lcm_brick.py` — LcmBrick implementing MemoryBrick
-- ✅ `brikie/bricks/memory/lcm/lcm_context.py` — ContextBuilder
-- ✅ `brikie/bricks/memory/lcm/tools.py` — get_lcm_tools
-- ✅ `brikie/bricks/memory/__init__.py` — Exports LcmBrick
-- ✅ `brikie/bricks/memory/lcm/__init__.py` — Exports get_lcm_tools
-- ✅ `brikie/kernel/event_loop.py` — Memory brick hooks registered during warm-up
-- ✅ Tests: 69 passing (23 LCM, 46 kernel)
+### Completed — Phase 3.2 MemPalace
+- ✅ `brikie/bricks/memory/mempalace/schema.sql` — entities, triples, spatial_map, spatial_regions
+- ✅ `brikie/bricks/memory/mempalace/mempalace_store.py` — MempalaceStore + MempalaceConnectionPool
+- ✅ `brikie/bricks/memory/mempalace/mempalace_brick.py` — MempalaceBrick(MemoryBrick, ToolBrick)
+- ✅ `brikie/bricks/memory/mempalace/entity_extractor.py` — NLP entity/triple extraction
+- ✅ `brikie/bricks/memory/mempalace/chroma_manager.py` — ChromaDB vector store
+- ✅ `brikie/bricks/memory/mempalace/tools.py` — 5 read-only tool schemas
+- ✅ `brikie/bricks/memory/mempalace/__init__.py` — exports
+
+### Completed — Phase 3.3 LLM Wiki
+- ✅ `brikie/bricks/memory/wiki/schema.sql` — pages, links, tags tables
+- ✅ `brikie/bricks/memory/wiki/wiki_store.py` — WikiStore + WikiConnectionPool (filesystem + SQLite)
+- ✅ `brikie/bricks/memory/wiki/wiki_search.py` — WikiSearcher (rank_bm25.BM25Okapi, dual indexes)
+- ✅ `brikie/bricks/memory/wiki/wiki_linter.py` — WikiLinter (5 regex checks: frontmatter, orphans, broken-links, caps, stale)
+- ✅ `brikie/bricks/memory/wiki/wiki_index.py` — WikiIndex (sharding at 400/800 lines, index.md)
+- ✅ `brikie/bricks/memory/wiki/wiki_tools.py` — 4 tool schemas (wiki:ingest, wiki:query, wiki:lint, wiki:index)
+- ✅ `brikie/bricks/memory/wiki/wiki_brick.py` — WikiBrick(MemoryBrick, ToolBrick)
+- ✅ `brikie/bricks/memory/wiki/__init__.py` — exports
+
+### Completed — Integration
+- ✅ `brikie/bricks/memory/__init__.py` — exports MemoryBrick ABC only (bricks are optional/individually importable)
+- ✅ `pyproject.toml` — deps: rank-bm25, PyYAML, chromadb, sentence-transformers
+- ✅ `brikie/kernel/event_loop.py` — _register_memory_hooks() discovers MemoryBricks dynamically
+- ✅ Tests: 138 passing (41 wiki, 41 mempalace, 23 LCM, 33 kernel)
 
 ### Key Decisions
-- SQLite "index" column must be quoted as `"index"` (reserved word in SQLite)
 - MemoryBrick ABC lives in `brikie/bricks/memory/memory_brick.py`
-- LcmConnectionPool handles all connection lifecycle with try/finally
+- All stores use `*ConnectionPool` pattern with try/finally
 - Tool schemas use OpenAI-compatible function format
-- Token estimation uses `len(content) // 4` heuristic
+- `brikie/bricks/memory/__init__.py` exports ONLY MemoryBrick ABC — concrete bricks imported individually
+- Wiki BM25 uses `rank_bm25.BM25Okapi` with dual indexes (body 0.7, frontmatter 0.3 weighting)
+- Wiki linting is regex-based (no LLM) — deterministic and cheap
+- Wiki sharding: 400-line soft cap (split at next ## heading), 800-line hard cap (force split)
 
 ## Next Steps
-1. Continue Phase 3 — MemPalace (spatial/temporal graph memory with ChromaDB + SQLite)
-2. Phase 3.3 — LLM Wiki (Markdown directory treated as a codebase)
-3. Phase 4 — Kadeia ecosystem integration
-4. Phase 5 — Multi-head orchestration
+1. Phase 4 — Kadeia ecosystem integration, Soul/Identity Bricks
+2. Phase 5 — Multi-head orchestration, Security/Logging/Improvement Bricks, infinite AFK loop
 
 ## Files Changed
-- `brikie/bricks/memory/lcm/schema.sql` (new)
-- `brikie/bricks/memory/lcm/lcm_store.py` (new)
-- `brikie/bricks/memory/lcm/lcm_brick.py` (new)
-- `brikie/bricks/memory/lcm/lcm_context.py` (new)
-- `brikie/bricks/memory/lcm/tools.py` (new)
-- `brikie/bricks/memory/__init__.py` (modified)
-- `brikie/bricks/memory/lcm/__init__.py` (modified)
-- `brikie/kernel/event_loop.py` (modified)
-- `brikie/kernel/registry.py` (modified)
-- `brikie/pyproject.toml` (modified)
-- `tests/test_lcm.py` (new)
-
-## Git Status
-```
-On branch master
-Your branch is ahead of 'origin/master' by 1 commit.
-  (use "git push" to publish your local commits)
-
-Changes not staged for commit:
-  brikie/kernel/event_loop.py
-  brikie/kernel/registry.py
-  pyproject.toml
-
-Untracked files:
-  brikie/bricks/memory/
-  tests/test_lcm.py
-```
+- `brikie/bricks/memory/mempalace/` (new — 8 files)
+- `brikie/bricks/memory/wiki/` (new — 8 files)
+- `brikie/bricks/memory/__init__.py` (modified — optional brick imports)
+- `brikie/kernel/event_loop.py` (modified — dynamic MemoryBrick discovery)
+- `brikie/kernel/registry.py` (modified — ToolBrick ABC)
+- `brikie/pyproject.toml` (modified — chromadb, sentence-transformers, rank-bm25, PyYAML)
+- `tests/test_mempalace.py` (new)
+- `tests/test_wiki.py` (new)
