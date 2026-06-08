@@ -17,6 +17,7 @@ from brikie.config.types import HookEvent, HookType, Message, ToolCall
 from brikie.kernel.hooks import HookDispatcher
 from brikie.kernel.registry import BrickRegistry, InterfaceBrick, ProviderBrick, ToolBrick
 from brikie.kernel.state import StateManager
+from brikie.bricks.memory.memory_brick import MemoryBrick
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,57 @@ class EventLoop:
             logger.info("Warming up brick: %s", brick.name)
             await brick.init()
         logger.info("Warm-up complete: %d brick(s) active.", len(bricks))
+
+        # Register memory brick hooks for LCM integration
+        self._register_memory_hooks()
+
+    def _register_memory_hooks(self) -> None:
+        """Register MemoryBrick callbacks with the hook dispatcher.
+
+        Memory Bricks intercept PRE_LLM and POST_LLM hooks to:
+        - Store incoming/outgoing messages in the immutable store
+        - Build compressed context windows for LLM calls
+        - Trigger DAG compaction when budget thresholds are exceeded
+        """
+        memory_bricks = self._registry.get_all(MemoryBrick)
+        for brick in memory_bricks:
+            # Register PRE_LLM hook — intercept incoming messages
+            self._hooks.register(
+                HookType.PRE_LLM,
+                lambda data, b=brick: self._memory_pre_llm(b, data),
+            )
+            # Register POST_LLM hook — intercept outgoing messages
+            self._hooks.register(
+                HookType.POST_LLM,
+                lambda data, b=brick: self._memory_post_llm(b, data),
+            )
+            logger.info("Registered memory hooks for brick: %s", brick.name)
+
+    async def _memory_pre_llm(self, brick: MemoryBrick, data: Any) -> None:
+        """Handle PRE_LLM hook for memory bricks.
+
+        Intercepts the message history and stores each message in LCM.
+        Builds compressed context before LLM calls.
+        """
+        # Session ID — use "default" if not set in state
+        session_id = self._state.get("session_id", "default")
+        # Ensure session exists and build context
+        context = await brick.build_context(session_id)
+        # Store is handled by the brick's intercept_message
+        # No need to modify the event flow here
+        return context
+
+    async def _memory_post_llm(self, brick: MemoryBrick, data: Any) -> None:
+        """Handle POST_LLM hook for memory bricks.
+
+        Stores the assistant's response in LCM and checks if compaction
+        is needed based on budget thresholds.
+        """
+        session_id = self._state.get("session_id", "default")
+        if isinstance(data, dict):
+            content = data.get("content", "")
+            await brick.intercept_message(session_id, "assistant", content)
+        return None
 
     # ------------------------------------------------------------------
     # Phase 2 — Single Turn

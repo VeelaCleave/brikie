@@ -125,7 +125,10 @@ class ToolBrick(ABC):
 # Brick Registry
 # ---------------------------------------------------------------------------
 
-Brick = ProviderBrick | InterfaceBrick | ToolBrick
+# Import MemoryBrick from the memory module to avoid duplication.
+from brikie.bricks.memory.memory_brick import MemoryBrick
+
+Brick = ProviderBrick | InterfaceBrick | ToolBrick | MemoryBrick
 BrickT = TypeVar("BrickT", bound=Brick)
 
 
