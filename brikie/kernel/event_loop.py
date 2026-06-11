@@ -270,64 +270,63 @@ class EventLoop:
         """Process tool calls, then get the LLM to continue."""
         if depth > 10:
             logger.warning("Tool-call depth limit reached (10).")
-            assistant_msg = Message(
-                role="assistant",
-                content="Tool-call loop detected.",
+            self._message_history.append(
+                Message(role="assistant", content="Tool-call loop detected.")
             )
-            self._message_history.append(assistant_msg)
             await self._render_output("Tool-call loop detected.")
             return
 
-        # Convert raw tool-call dicts to ToolCall objects
+        # Store the assistant message with tool calls in history
+        assistant_msg = Message(
+            role="assistant",
+            content="",
+            tool_calls=raw_calls,
+        )
+        self._message_history.append(assistant_msg)
+
+        # Convert raw tool-call dicts to ToolCall objects, preserving call IDs
         tool_calls = self._raw_to_tool_calls(raw_calls)
 
         # PRE_TOOL
-        hook_event = HookEvent(
+        await self._hooks.dispatch(HookType.PRE_TOOL, HookEvent(
             hook_type=HookType.PRE_TOOL,
             data=tool_calls,
             brick_name="event_loop",
-        )
-        await self._hooks.dispatch(hook_event.hook_type, hook_event)
+        ))
 
         # Execute tools
         tool_calls = await self.process_tool_calls(tool_calls)
 
         # POST_TOOL
-        hook_event = HookEvent(
+        await self._hooks.dispatch(HookType.POST_TOOL, HookEvent(
             hook_type=HookType.POST_TOOL,
             data=tool_calls,
             brick_name="event_loop",
-        )
-        await self._hooks.dispatch(hook_event.hook_type, hook_event)
+        ))
 
-        # Store tool results in conversation
+        # Store tool results — use the actual call ID from the LLM response
         for tc in tool_calls:
-            tool_msg = Message(
+            self._message_history.append(Message(
                 role="tool",
                 content=str(tc.result) if tc.result else "null",
-                tool_call_id=tc.name,
-            )
-            self._message_history.append(tool_msg)
+                tool_call_id=tc.tool_call_id or tc.name,
+            ))
 
         # POST_TOOL_CALL
-        hook_event = HookEvent(
+        await self._hooks.dispatch(HookType.POST_TOOL_CALL, HookEvent(
             hook_type=HookType.POST_TOOL_CALL,
             data=tool_calls,
             brick_name="event_loop",
-        )
-        await self._hooks.dispatch(hook_event.hook_type, hook_event)
+        ))
 
         # Continue: LLM processes tool results
-        tool_schemas = self._collect_tool_schemas()
-        content, more_raw = await self._call_providers(tool_schemas)
+        content, more_raw = await self._call_providers(self._collect_tool_schemas())
 
         if more_raw:
             await self._handle_tools(more_raw, depth + 1)
             return
 
-        # Final response
-        assistant_msg = Message(role="assistant", content=content)
-        self._message_history.append(assistant_msg)
+        self._message_history.append(Message(role="assistant", content=content))
         await self._render_output(content)
 
     # ------------------------------------------------------------------
@@ -371,10 +370,15 @@ class EventLoop:
         return tool_calls
 
     def _raw_to_tool_calls(self, raw: List[Dict[str, Any]]) -> List[ToolCall]:
-        """Convert raw provider tool-call dicts to ToolCall objects."""
+        """Convert raw provider tool-call dicts to ToolCall objects.
+
+        Preserves the OpenAI ``id`` field (e.g. ``call_abc123``) so tool
+        results can be matched back to the LLM's original tool call.
+        """
         result: List[ToolCall] = []
         for item in raw:
-            # OpenAI format: {"type": "function", "function": {"name": ..., "arguments": ...}}
+            call_id = item.get("id", "")
+            # OpenAI format: {"id": "call_xxx", "type": "function", "function": {...}}
             if "function" in item:
                 func = item["function"]
                 name = func.get("name", "")
@@ -383,10 +387,14 @@ class EventLoop:
                     args = json.loads(args_raw)
                 except (json.JSONDecodeError, TypeError):
                     args = args_raw
-                result.append(ToolCall(name=name, args=args))
+                result.append(ToolCall(name=name, args=args, tool_call_id=call_id))
             # Generic format: {"name": ..., "args": ...}
             elif "name" in item:
-                result.append(ToolCall(name=item["name"], args=item.get("args", {})))
+                result.append(ToolCall(
+                    name=item["name"],
+                    args=item.get("args", {}),
+                    tool_call_id=call_id,
+                ))
         return result
 
     # ------------------------------------------------------------------
@@ -394,15 +402,43 @@ class EventLoop:
     # ------------------------------------------------------------------
 
     def _messages_to_dicts(self) -> List[Dict[str, Any]]:
-        """Serialize the message history to provider-compatible dicts."""
-        return [
-            {
-                "role": m.role,
-                "content": m.content,
-                "tool_call_id": m.tool_call_id,
-            }
-            for m in self._message_history
-        ]
+        """Serialize the message history to provider-compatible dicts.
+
+        Follows the OpenAI /chat/completions wire format:
+        - ``role: "assistant"`` with ``tool_calls`` includes a ``tool_calls`` array
+        - ``role: "tool"`` includes ``tool_call_id`` matching the call
+        - Other roles pass ``content`` and ``role`` verbatim
+        """
+        result: List[Dict[str, Any]] = []
+        for m in self._message_history:
+            if m.role == "tool":
+                result.append({
+                    "role": "tool",
+                    "content": m.content,
+                    "tool_call_id": m.tool_call_id or "",
+                })
+            elif m.role == "assistant" and m.tool_calls:
+                result.append({
+                    "role": "assistant",
+                    "content": m.content or None,
+                    "tool_calls": [
+                        {
+                            "id": tc.get("id", ""),
+                            "type": "function",
+                            "function": {
+                                "name": tc.get("function", {}).get("name", ""),
+                                "arguments": tc.get("function", {}).get("arguments", "{}"),
+                            },
+                        }
+                        for tc in m.tool_calls
+                    ],
+                })
+            else:
+                result.append({
+                    "role": m.role,
+                    "content": m.content,
+                })
+        return result
 
     # ------------------------------------------------------------------
     # Tool Schema Collection

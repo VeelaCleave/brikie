@@ -33,12 +33,12 @@ class CLIBrick(InterfaceBrick):
     async def init(self) -> None:
         """Initialize the CLI interface."""
         self._console.print("[bold green]Brikie CLI Brick ready.[/bold green]")
-        super().init()
+        await super().init()
 
     async def shutdown(self) -> None:
         """Gracefully release CLI resources."""
         self._console.print("[bold red]CLI Brick shutting down.[/bold red]")
-        super().shutdown()
+        await super().shutdown()
 
     async def get_input(self) -> str:
         """Capture user input from stdin with color-coded prompt."""

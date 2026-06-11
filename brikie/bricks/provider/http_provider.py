@@ -72,14 +72,14 @@ class HTTPProvider(ProviderBrick):
             self._model,
             self._api_format,
         )
-        super().init()
+        await super().init()
 
     async def shutdown(self) -> None:
         """Close the async HTTP client."""
         if self._client:
             await self._client.aclose()
             self._client = None
-        super().shutdown()
+        await super().shutdown()
 
     async def get_completion(
         self,

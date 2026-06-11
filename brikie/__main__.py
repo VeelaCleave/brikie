@@ -129,18 +129,11 @@ async def main() -> None:
     interface = InterfaceCls()
     tool = ToolCls()
 
-    # Register bricks
+    # Register bricks — EventLoop.run() handles warm-up via _phase_warm_up()
     registry.register(provider)
     registry.register(interface)
     registry.register(tool)
 
-    # Initialize bricks
-    await provider.init()
-    await interface.init()
-    await tool.init()
-
-    # Run the kernel event loop — hooks memory, logging, improvement,
-    # and security bricks automatically during warm-up.
     loop = EventLoop(
         registry=registry,
         state=state,
@@ -157,5 +150,10 @@ async def main() -> None:
         await tool.shutdown()
 
 
-if __name__ == "__main__":
+def entry_point() -> None:
+    """Synchronous entry point for ``brikie`` CLI command."""
     asyncio.run(main())
+
+
+if __name__ == "__main__":
+    entry_point()

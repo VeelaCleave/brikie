@@ -708,13 +708,13 @@ class TestDiagnosticsCollectorBrick:
 # ======================================================================
 
 
-class TestToolCallTraceId:
-    """Verify ToolCall trace_id field."""
+class TestToolCallId:
+    """Verify ToolCall tool_call_id field."""
 
-    def test_tool_call_trace_id_default(self):
+    def test_tool_call_id_default(self):
         tc = ToolCall(name="test", args={})
-        assert tc.trace_id is None
+        assert tc.tool_call_id is None
 
-    def test_tool_call_trace_id_set(self):
-        tc = ToolCall(name="test", args={}, trace_id="custom-trace")
-        assert tc.trace_id == "custom-trace"
+    def test_tool_call_id_set(self):
+        tc = ToolCall(name="test", args={}, tool_call_id="call_abc123")
+        assert tc.tool_call_id == "call_abc123"

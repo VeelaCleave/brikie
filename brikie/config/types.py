@@ -3,7 +3,7 @@
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 class BrickState(Enum):
@@ -30,13 +30,15 @@ class Message:
     """Standardized message object flowing through the Baseplate pipeline.
 
     Attributes:
-        role: Origin of the message (e.g., 'user', 'assistant', 'tool', 'system').
+        role: Origin (e.g., 'user', 'assistant', 'tool', 'system').
         content: The text payload.
-        tool_call_id: Optional identifier linking this message to a specific tool call.
+        tool_call_id: For ``role="tool"`` — the call ID this result responds to.
+        tool_calls: For ``role="assistant"`` — tool calls this message initiated.
     """
     role: str
     content: str
     tool_call_id: Optional[str] = field(default=None)
+    tool_calls: Optional[List[Dict[str, Any]]] = field(default=None)
 
 
 @dataclass
@@ -47,12 +49,13 @@ class ToolCall:
         name: The canonical tool name (e.g., 'calculator', 'cloak_browser').
         args: Key-value arguments passed to the tool.
         result: The return value after execution (set after the tool runs).
-        trace_id: Optional UUID for correlating tool calls across middleware hooks.
+        tool_call_id: The LLM's call ID (e.g. ``call_abc123``) for matching
+                      tool results to the assistant's tool call message.
     """
     name: str
     args: Dict[str, Any]
     result: Optional[str] = field(default=None)
-    trace_id: Optional[str] = field(default=None)
+    tool_call_id: Optional[str] = field(default=None)
 
 
 @dataclass

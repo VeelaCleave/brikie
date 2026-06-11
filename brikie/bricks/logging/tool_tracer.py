@@ -166,7 +166,7 @@ class ToolTracerBrick(LoggingBrick):
         now = datetime.now(timezone.utc).isoformat()
 
         for tc in tool_calls:
-            trace_id = tc.trace_id or str(uuid.uuid4())
+            trace_id = tc.tool_call_id or str(uuid.uuid4())
             self._current_trace_ids.append(trace_id)
 
             # Enforce in-flight limit — evict oldest if necessary
@@ -207,7 +207,7 @@ class ToolTracerBrick(LoggingBrick):
             trace_id = (
                 self._current_trace_ids[i]
                 if i < len(self._current_trace_ids)
-                else tc.trace_id or str(uuid.uuid4())
+                else tc.tool_call_id or str(uuid.uuid4())
             )
             trace = self._in_flight.get(trace_id)
             if trace is None:
@@ -368,7 +368,7 @@ class ToolTracerBrick(LoggingBrick):
                             name=item.get("name", ""),
                             args=item.get("args", {}),
                             result=item.get("result", None),
-                            trace_id=item.get("trace_id", ""),
+                            tool_call_id=item.get("tool_call_id", ""),
                         )
                     )
             return result
