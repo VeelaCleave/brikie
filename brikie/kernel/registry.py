@@ -125,10 +125,11 @@ class ToolBrick(ABC):
 # Brick Registry
 # ---------------------------------------------------------------------------
 
-# Import MemoryBrick from the memory module to avoid duplication.
+# Import MemoryBrick and LoggingBrick from their modules.
+from brikie.bricks.logging.base import LoggingBrick
 from brikie.bricks.memory.memory_brick import MemoryBrick
 
-Brick = ProviderBrick | InterfaceBrick | ToolBrick | MemoryBrick
+Brick = ProviderBrick | InterfaceBrick | ToolBrick | MemoryBrick | LoggingBrick
 BrickT = TypeVar("BrickT", bound=Brick)
 
 

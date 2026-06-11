@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 # ── ABCs only — no concrete bricks ────────────────────────────────────
 from brikie.bricks.interface import InterfaceBrick
+from brikie.bricks.logging import LoggingBrick
 from brikie.bricks.provider import ProviderBrick
 from brikie.bricks.tool import ToolBrick
 from brikie.bricks.soul import SoulBrick
@@ -36,6 +37,7 @@ __all__ = [
     "ToolBrick",
     "SoulBrick",
     "MemoryBrick",
+    "LoggingBrick",
     "discover_bricks",
 ]
 
@@ -45,6 +47,7 @@ BRICK_SUBPACKAGES: Dict[str, str] = {
     "provider": "brikie.bricks.provider",
     "soul": "brikie.bricks.soul",
     "memory": "brikie.bricks.memory",
+    "logging": "brikie.bricks.logging",
     "registry": "brikie.bricks.registry",
 }
 

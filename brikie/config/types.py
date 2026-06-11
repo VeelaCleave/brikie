@@ -46,10 +46,12 @@ class ToolCall:
         name: The canonical tool name (e.g., 'calculator', 'cloak_browser').
         args: Key-value arguments passed to the tool.
         result: The return value after execution (set after the tool runs).
+        trace_id: Optional UUID for correlating tool calls across middleware hooks.
     """
     name: str
     args: Dict[str, Any]
     result: Optional[str] = field(default=None)
+    trace_id: Optional[str] = field(default=None)
 
 
 @dataclass

@@ -13,6 +13,9 @@ from brikie.kernel.registry import (
 )
 from brikie.kernel.state import StateManager
 
+# Import LoggingBrick here so it's available from kernel for typing
+from brikie.bricks.logging.base import LoggingBrick  # noqa: F401 — re-exported
+
 __all__ = [
     "EventLoop",
     "HookCallback",
@@ -22,4 +25,5 @@ __all__ = [
     "ProviderBrick",
     "InterfaceBrick",
     "ToolBrick",
+    "LoggingBrick",
 ]

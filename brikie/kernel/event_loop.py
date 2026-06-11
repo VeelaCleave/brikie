@@ -17,6 +17,7 @@ from brikie.config.types import HookEvent, HookType, Message, ToolCall
 from brikie.kernel.hooks import HookDispatcher
 from brikie.kernel.registry import BrickRegistry, InterfaceBrick, ProviderBrick, ToolBrick
 from brikie.kernel.state import StateManager
+from brikie.bricks.logging.base import LoggingBrick
 from brikie.bricks.memory.memory_brick import MemoryBrick
 
 logger = logging.getLogger(__name__)
@@ -90,6 +91,9 @@ class EventLoop:
         # Register memory brick hooks for LCM integration
         self._register_memory_hooks()
 
+        # Register logging brick hooks for diagnostics
+        self._register_logging_hooks()
+
     def _register_memory_hooks(self) -> None:
         """Register MemoryBrick callbacks with the hook dispatcher.
 
@@ -125,6 +129,25 @@ class EventLoop:
         # Store is handled by the brick's intercept_message
         # No need to modify the event flow here
         return context
+
+    def _register_logging_hooks(self) -> None:
+        """Register LoggingBrick hook callbacks with the hook dispatcher.
+
+        Logging Bricks expose their callbacks via get_hook_callbacks().
+        The EventLoop reads these and registers each callback at the
+        appropriate hook stage during warm-up.
+        """
+        logging_bricks = self._registry.get_all(LoggingBrick)
+        for brick in logging_bricks:
+            callbacks = brick.get_hook_callbacks()
+            for hook_type, cb_list in callbacks.items():
+                for cb in cb_list:
+                    self._hooks.register(hook_type, cb)
+            logger.info(
+                "Registered %d hook callback(s) for logging brick: %s",
+                sum(len(v) for v in callbacks.values()),
+                brick.name,
+            )
 
     async def _memory_post_llm(self, brick: MemoryBrick, data: Any) -> None:
         """Handle POST_LLM hook for memory bricks.
