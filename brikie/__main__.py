@@ -1,10 +1,18 @@
 """Brikie — Baseplate entry point.
 
 Boots the kernel, registers bricks, and runs the async event loop.
+
+No concrete brick is imported by name.  Bricks are selected by:
+1. CLI args (--provider, --interface, --tool)
+2. Environment variables (BRIKIE_PROVIDER, BRIKIE_INTERFACE, BRIKIE_TOOL)
+3. Default fallback (imported dynamically from known subpackages)
 """
 
 import argparse
 import asyncio
+import importlib
+import logging
+import os
 import sys
 from typing import Any, Dict, List
 
@@ -13,13 +21,36 @@ from brikie.kernel.hooks import HookDispatcher
 from brikie.kernel.registry import BrickRegistry, InterfaceBrick, ProviderBrick, ToolBrick
 from brikie.kernel.state import StateManager
 
+logger = logging.getLogger(__name__)
+
 # ---------------------------------------------------------------------------
-# Brick imports — resolved once companion modules are built
+# Brick selection helpers
 # ---------------------------------------------------------------------------
 
-from brikie.bricks.interface.cli import CLIBrick
-from brikie.bricks.provider.http_provider import HTTPProvider
-from brikie.bricks.tool.dummy import DummyToolBrick
+_DEFAULT_PROVIDER = "brikie.bricks.provider.http_provider.HTTPProvider"
+_DEFAULT_INTERFACE = "brikie.bricks.interface.cli.CLIBrick"
+_DEFAULT_TOOL = "brikie.bricks.tool.dummy.DummyToolBrick"
+
+
+def _resolve_import(dotted: str) -> Any:
+    """Import a class from a dotted ``module.ClassName`` string."""
+    module_path, _, class_name = dotted.rpartition(".")
+    mod = importlib.import_module(module_path)
+    return getattr(mod, class_name)
+
+
+def _pick_brick(
+    cli_value: str | None,
+    env_var: str,
+    default: str,
+) -> Any:
+    """Resolve a brick class from CLI → env → default."""
+    raw = cli_value or os.environ.get(env_var) or default
+    try:
+        return _resolve_import(raw)
+    except (ImportError, AttributeError) as exc:
+        logger.warning("Brick %s not found (%s); falling back to %s", raw, exc, default)
+        return _resolve_import(default)
 
 
 def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
@@ -42,6 +73,21 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
         "--base-url",
         default="https://api.openai.com/v1",
         help="Base URL for the provider (default: OpenAI)",
+    )
+    parser.add_argument(
+        "--provider",
+        default=None,
+        help="Dotted path to a ProviderBrick class (env: BRIKIE_PROVIDER)",
+    )
+    parser.add_argument(
+        "--interface",
+        default=None,
+        help="Dotted path to an InterfaceBrick class (env: BRIKIE_INTERFACE)",
+    )
+    parser.add_argument(
+        "--tool",
+        default=None,
+        help="Dotted path to a ToolBrick class (env: BRIKIE_TOOL)",
     )
     return parser.parse_args(argv)
 
@@ -131,7 +177,16 @@ async def event_loop(
 
 
 async def main() -> None:
-    """Bootstrap the Baseplate kernel and run the event loop."""
+    """Bootstrap the Baseplate kernel and run the event loop.
+
+    Bricks are resolved dynamically via ``_pick_brick`` — no concrete
+    brick is imported by name at the top of this module.  The resolution
+    chain is::
+
+        CLI --provider/--interface/--tool
+            → $BRIKIE_PROVIDER / $BRIKIE_INTERFACE / $BRIKIE_TOOL
+                → built-in defaults
+    """
     args = parse_args()
 
     # Kernel components
@@ -139,14 +194,14 @@ async def main() -> None:
     state = StateManager()
     hooks = HookDispatcher()
 
-    # Create bricks
-    provider = HTTPProvider(
-        model=args.model,
-        api_key=args.api_key,
-        base_url=args.base_url,
-    )
-    interface = CLIBrick()
-    tool = DummyToolBrick()
+    # Dynamically resolve brick classes — never hardcoded
+    ProviderCls = _pick_brick(args.provider, "BRIKIE_PROVIDER", _DEFAULT_PROVIDER)
+    InterfaceCls = _pick_brick(args.interface, "BRIKIE_INTERFACE", _DEFAULT_INTERFACE)
+    ToolCls = _pick_brick(args.tool, "BRIKIE_TOOL", _DEFAULT_TOOL)
+
+    provider = ProviderCls(model=args.model, api_key=args.api_key, base_url=args.base_url)
+    interface = InterfaceCls()
+    tool = ToolCls()
 
     # Register bricks
     registry.register(provider)
@@ -164,7 +219,6 @@ async def main() -> None:
     except (KeyboardInterrupt, EOFError):
         print("\n[brikie] Shutting down...")
     finally:
-        # Graceful shutdown
         await provider.shutdown()
         await interface.shutdown()
         await tool.shutdown()
