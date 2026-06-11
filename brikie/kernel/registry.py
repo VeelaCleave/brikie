@@ -178,6 +178,19 @@ class BrickRegistry:
             raise KeyError(name)
         return self._bricks[name]
 
+    def unregister(self, name: str) -> None:
+        """Remove a Brick by its canonical name.
+
+        Args:
+            name: The brick's ``name`` property value.
+
+        Raises:
+            KeyError: If no Brick with the given name is registered.
+        """
+        if name not in self._bricks:
+            raise KeyError(name)
+        del self._bricks[name]
+
     def clear(self) -> None:
         """Remove all registered Bricks."""
         self._bricks.clear()

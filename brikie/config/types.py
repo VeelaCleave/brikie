@@ -1,5 +1,6 @@
 """Shared types, enums, and Pydantic models for the Brikie Baseplate."""
 
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Optional
@@ -66,3 +67,26 @@ class HookEvent:
     hook_type: HookType
     data: Any
     brick_name: str
+
+
+class AFKMode(str, Enum):
+    """Operational modes for the Baseplate event loop."""
+    INTERACTIVE = "interactive"
+    AFK = "afk"
+
+
+@dataclass
+class BusEvent:
+    """Event message routed through the InternalEventBus between Souls.
+
+    During AFK mode, Souls communicate exclusively via BusEvent messages
+    rather than through the CLI Interface Brick.
+    """
+    event_type: str = ""
+    source_soul: str = ""
+    target_soul: str = "*"
+    payload: Dict[str, Any] = field(default_factory=dict)
+    correlation_id: str = field(
+        default_factory=lambda: uuid.uuid4().hex,
+    )
+    timestamp: float = field(default_factory=lambda: __import__("time").time())
