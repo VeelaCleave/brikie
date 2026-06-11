@@ -26,3 +26,4 @@ brikie/bricks/memory/wiki/wiki_directory/
 
 # Logging brick data
 ~/.brikie/logs/
+*.db
