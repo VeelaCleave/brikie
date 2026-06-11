@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 class MempalaceBrick(MemoryBrick, ToolBrick):
+    BRICK_NUMBER = "BRK-051"
     """MemPalace Memory Brick with entity extraction and spatial mapping.
 
     Implements:

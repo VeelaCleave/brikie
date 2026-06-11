@@ -12,6 +12,7 @@ from brikie.bricks.soul.base import SoulBrick
 
 @dataclass
 class SisyphusOrchestrator(SoulBrick):
+    BRICK_NUMBER = "BRK-040"
     """Sisyphus Orchestrator — plans, delegates, and drives tasks to completion.
 
     This persona is the primary orchestrator: it never implements directly

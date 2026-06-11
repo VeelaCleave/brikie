@@ -46,6 +46,7 @@ class TokenUsageSnapshot:
 
 
 class TokenLoggerBrick(LoggingBrick):
+    BRICK_NUMBER = "BRK-060"
     """Records every LLM API call: token counts, latency, model, cost.
 
     Schema (token_logs table):

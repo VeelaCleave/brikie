@@ -13,6 +13,7 @@ from brikie.bricks.soul.base import SoulBrick
 
 @dataclass
 class CryptoTradingAgent(SoulBrick):
+    BRICK_NUMBER = "BRK-042"
     """Crypto Trading Agent — market analysis and trade execution persona.
 
     Operates across multiple chains (Ethereum, Solana, Polygon) with access

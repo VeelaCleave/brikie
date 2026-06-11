@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class HTTPProvider(ProviderBrick):
+    BRICK_NUMBER = "BRK-010"
     """Provider Brick that communicates with LLM APIs over HTTP.
 
     Supports both OpenAI and Anthropic (Claude) API formats.

@@ -50,6 +50,7 @@ _DEFAULT_BLOCK_PATTERNS: List[Tuple[str, str]] = [
 
 
 class CommandFirewallBrick(SecurityBrick):
+    BRICK_NUMBER = "BRK-070"
     """Regex-based command firewall that blocks destructive tool calls.
 
     Evaluates tool names and argument strings against a configurable

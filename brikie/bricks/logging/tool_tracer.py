@@ -66,6 +66,7 @@ class ToolCallTrace:
 
 
 class ToolTracerBrick(LoggingBrick):
+    BRICK_NUMBER = "BRK-061"
     """Tracks every tool call through its lifecycle stages.
 
     Hooks into PRE_TOOL, POST_TOOL, and POST_TOOL_CALL to build a

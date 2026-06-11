@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 class WikiBrick(MemoryBrick, ToolBrick):
+    BRICK_NUMBER = "BRK-052"
     """LLM Wiki Brick with auto-extraction and wiki management tools.
 
     Implements:

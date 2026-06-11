@@ -63,6 +63,7 @@ class Subscriber:
 
 
 class DiagnosticsCollectorBrick(LoggingBrick):
+    BRICK_NUMBER = "BRK-062"
     """Aggregates log events and exposes diagnostics to the Dreamer.
 
     This brick is the **central nervous system** for the AFK feedback

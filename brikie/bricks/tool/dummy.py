@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class DummyToolBrick(ToolBrick):
+    BRICK_NUMBER = "BRK-030"
     """A collection of simple tools for testing the Baseplate pipeline.
 
     Tools:

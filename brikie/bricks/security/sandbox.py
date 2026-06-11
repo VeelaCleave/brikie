@@ -30,6 +30,7 @@ class SandboxConfig:
 
 
 class SandboxSecurityBrick(SecurityBrick):
+    BRICK_NUMBER = "BRK-071"
     """Sandbox Security Brick that routes tool execution through Docker.
 
     When the firewall allows a tool but the tool is flagged as requiring

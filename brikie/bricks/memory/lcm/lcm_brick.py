@@ -8,6 +8,7 @@ from brikie.bricks.memory.memory_brick import MemoryBrick
 
 
 class LcmBrick(MemoryBrick):
+    BRICK_NUMBER = "BRK-050"
     """Lossless Context Management Brick."""
 
     def __init__(self, db_path: str = "lcm.db") -> None:

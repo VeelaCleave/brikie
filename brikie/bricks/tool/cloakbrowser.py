@@ -102,6 +102,7 @@ def find_cloakbrowser_binary() -> str | None:
 # ---------------------------------------------------------------------------
 
 class CloakBrowserBrick(ToolBrick):
+    BRICK_NUMBER = "BRK-031"
     """Browser automation tool using Playwright + CloakBrowser binary.
 
     Exposes browser_navigate, browser_extract, browser_click, and

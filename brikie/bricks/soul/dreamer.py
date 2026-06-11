@@ -14,6 +14,7 @@ from brikie.bricks.soul.base import SoulBrick
 
 @dataclass
 class Dreamer(SoulBrick):
+    BRICK_NUMBER = "BRK-041"
     """Dreamer — exploratory, lateral-thinking agent that proposes features.
 
     This persona focuses on reading system state (logs, memory, wiki) and
