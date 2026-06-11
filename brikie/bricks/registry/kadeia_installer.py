@@ -8,12 +8,13 @@ at runtime.  All installed bricks are recorded in an in-memory dict.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from brikie.bricks.registry.base import BrickManifest
 from brikie.bricks.registry.kadeia_registry import KadeiaRegistry
 from brikie.bricks.registry.tools import get_kadeia_tools
 from brikie.bricks.tool.base import ToolBrick
+from brikie.kernel.registry import BrickRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -30,15 +31,21 @@ class KadeiaInstallerBrick(ToolBrick):
 
     tools: List[Dict[str, Any]] = get_kadeia_tools()
 
-    def __init__(self, registry_url: str = "https://kadeia.co/bricks") -> None:
+    def __init__(
+        self,
+        registry_url: str = "https://kadeia.co/bricks",
+        brick_registry: Optional[BrickRegistry] = None,
+    ) -> None:
         """Initialize the installer with a KadeiaRegistry client.
 
         Args:
             registry_url: Base URL of the Kadeia brick registry.
+            brick_registry: The local BrickRegistry to register into.
         """
         super().__init__()
         self._name = "kadeia_installer"
-        self._registry = KadeiaRegistry(registry_url)
+        self._kadeia = KadeiaRegistry(registry_url)
+        self._brick_registry = brick_registry
         self._installed: Dict[str, BrickManifest] = {}
 
     @property
@@ -82,7 +89,7 @@ class KadeiaInstallerBrick(ToolBrick):
         if not isinstance(query, str) or not query.strip():
             raise ValueError("kadeia_search: 'query' must be a non-empty string")
 
-        results = await self._registry.search(query)
+        results = await self._kadeia.search(query)
 
         # Apply optional type filter client-side
         type_filter = args.get("type_filter")
@@ -103,13 +110,20 @@ class KadeiaInstallerBrick(ToolBrick):
 
         logger.info("Installing brick '%s' (version=%s)", name, version)
 
-        manifest = await self._registry.fetch_manifest(name, version)
-        install_path = await self._registry.download_brick(
+        manifest = await self._kadeia.fetch_manifest(name, version)
+        install_path = await self._kadeia.download_brick(
             manifest, target_dir="/tmp/brikie/installed"
         )
 
+        if self._brick_registry is not None:
+            await self._kadeia.register_brick(manifest, self._brick_registry)
+
         self._installed[manifest.name] = manifest
-        logger.info("Brick '%s' v%s installed to %s", manifest.name, manifest.version, install_path)
+        logger.info(
+            "Brick '%s' v%s installed%s",
+            manifest.name, manifest.version,
+            f" and registered" if self._brick_registry else "",
+        )
 
         return {
             "name": manifest.name,
@@ -122,7 +136,7 @@ class KadeiaInstallerBrick(ToolBrick):
 
     async def _list(self, args: Dict[str, Any]) -> List[Dict[str, Any]]:
         """List available bricks, optionally filtered by type."""
-        manifests = await self._registry.list_available()
+        manifests = await self._kadeia.list_available()
 
         type_filter = args.get("type_filter")
         if type_filter:

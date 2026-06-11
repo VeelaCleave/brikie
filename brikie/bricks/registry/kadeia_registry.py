@@ -7,6 +7,7 @@ simulate brick downloads.
 
 from __future__ import annotations
 
+import importlib
 import json
 import logging
 from pathlib import Path
@@ -127,24 +128,51 @@ class KadeiaRegistry:
     async def register_brick(
         self, manifest: BrickManifest, brick_registry: Any  # noqa: ANN401
     ) -> bool:
-        """Register a brick manifest with a local brick registry.
+        """Dynamically import and register a brick with the Baseplate registry.
 
-        This is a **placeholder** implementation that simply logs the
-        registration attempt and returns ``True``.
+        Reads the manifest's module path, imports the brick class,
+        instantiates it, and calls ``brick_registry.register()``.
 
         Args:
             manifest: The brick to register.
-            brick_registry: The target local brick registry object.
+            brick_registry: A ``BrickRegistry`` instance.
 
         Returns:
-            Always True.
+            True if the brick was imported and registered.
+
+        Raises:
+            KadeiaRegistryError: If the brick module or class cannot be loaded.
         """
+        module_path = manifest.download_url.replace("https://kadeia.co/bricks/", "")
+        module_path = module_path.replace("/", ".").rstrip(".")
+
+        try:
+            mod = importlib.import_module(module_path)
+        except ImportError as exc:
+            raise KadeiaRegistryError(
+                f"Cannot import brick module '{module_path}': {exc}"
+            ) from exc
+
+        # Find the brick class in the module
+        brick_cls = None
+        for attr_name in dir(mod):
+            attr = getattr(mod, attr_name)
+            if isinstance(attr, type) and hasattr(attr, "BRICK_NUMBER"):
+                brick_cls = attr
+                break
+
+        if brick_cls is None:
+            raise KadeiaRegistryError(
+                f"No brick class found in module '{module_path}' "
+                "(must have BRICK_NUMBER class attribute)"
+            )
+
+        brick_instance = brick_cls()
+        brick_registry.register(brick_instance)
+
         logger.info(
-            "Placeholder: registering %s v%s (type=%s) with %s",
-            manifest.name,
-            manifest.version,
-            manifest.type,
-            type(brick_registry).__name__,
+            "Registered brick %s (BRK-%s) v%s via Kadeia",
+            manifest.name, brick_cls.BRICK_NUMBER, manifest.version,
         )
         return True
 

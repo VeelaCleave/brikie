@@ -210,7 +210,7 @@ class TestKadeiaInstallerBrickExecute:
                 download_url="https://example.com/found.tar.gz",
             )
         ]
-        brick._registry.search = AsyncMock(return_value=mock_results)
+        brick._kadeia.search = AsyncMock(return_value=mock_results)
 
         result = await brick.execute("kadeia_search", {"query": "test"})
         assert isinstance(result, list)
@@ -218,12 +218,12 @@ class TestKadeiaInstallerBrickExecute:
         assert result[0]["name"] == "found_brick"
         assert result[0]["version"] == "1.0"
         assert result[0]["type"] == "soul"
-        brick._registry.search.assert_awaited_once_with("test")
+        brick._kadeia.search.assert_awaited_once_with("test")
 
     @pytest.mark.asyncio
     async def test_search_with_type_filter(self):
         brick = KadeiaInstallerBrick()
-        brick._registry.search = AsyncMock(
+        brick._kadeia.search = AsyncMock(
             return_value=[
                 BrickManifest(name="a", version="1", type="soul", description="", download_url="u"),
                 BrickManifest(name="b", version="1", type="tool", description="", download_url="u"),
@@ -251,8 +251,8 @@ class TestKadeiaInstallerBrickExecute:
             download_url="https://example.com/test.tar.gz",
             dependencies=["dep_a"],
         )
-        brick._registry.fetch_manifest = AsyncMock(return_value=manifest)
-        brick._registry.download_brick = AsyncMock(return_value="/tmp/brikie/installed/test_brick-2.0.0.receipt.json")
+        brick._kadeia.fetch_manifest = AsyncMock(return_value=manifest)
+        brick._kadeia.download_brick = AsyncMock(return_value="/tmp/brikie/installed/test_brick-2.0.0.receipt.json")
 
         result = await brick.execute("kadeia_install", {"name": "test_brick"})
         assert result["name"] == "test_brick"
@@ -270,12 +270,12 @@ class TestKadeiaInstallerBrickExecute:
         manifest = BrickManifest(
             name="test_brick", version="3.0.0", type="tool", description="", download_url="u"
         )
-        brick._registry.fetch_manifest = AsyncMock(return_value=manifest)
-        brick._registry.download_brick = AsyncMock(return_value="/tmp/path")
+        brick._kadeia.fetch_manifest = AsyncMock(return_value=manifest)
+        brick._kadeia.download_brick = AsyncMock(return_value="/tmp/path")
 
         result = await brick.execute("kadeia_install", {"name": "test_brick", "version": "3.0.0"})
         assert result["version"] == "3.0.0"
-        brick._registry.fetch_manifest.assert_awaited_once_with("test_brick", "3.0.0")
+        brick._kadeia.fetch_manifest.assert_awaited_once_with("test_brick", "3.0.0")
 
     @pytest.mark.asyncio
     async def test_install_empty_name_raises(self):
@@ -286,7 +286,7 @@ class TestKadeiaInstallerBrickExecute:
     @pytest.mark.asyncio
     async def test_list(self):
         brick = KadeiaInstallerBrick()
-        brick._registry.list_available = AsyncMock(
+        brick._kadeia.list_available = AsyncMock(
             return_value=[
                 BrickManifest(name="a", version="1", type="soul", description="", download_url="u"),
                 BrickManifest(name="b", version="1", type="tool", description="", download_url="u"),
@@ -302,7 +302,7 @@ class TestKadeiaInstallerBrickExecute:
     @pytest.mark.asyncio
     async def test_list_with_type_filter(self):
         brick = KadeiaInstallerBrick()
-        brick._registry.list_available = AsyncMock(
+        brick._kadeia.list_available = AsyncMock(
             return_value=[
                 BrickManifest(name="a", version="1", type="soul", description="", download_url="u"),
                 BrickManifest(name="b", version="1", type="tool", description="", download_url="u"),
@@ -327,8 +327,8 @@ class TestKadeiaInstallerBrickExecute:
         manifest = BrickManifest(
             name="new_brick", version="1.0", type="soul", description="", download_url="u"
         )
-        brick._registry.fetch_manifest = AsyncMock(return_value=manifest)
-        brick._registry.download_brick = AsyncMock(return_value="/tmp/path")
+        brick._kadeia.fetch_manifest = AsyncMock(return_value=manifest)
+        brick._kadeia.download_brick = AsyncMock(return_value="/tmp/path")
 
         await brick.execute("kadeia_install", {"name": "new_brick"})
         assert "new_brick" in brick.installed
@@ -419,13 +419,15 @@ class TestKadeiaRegistry:
         assert receipt["dependencies"] == ["dep1"]
 
     @pytest.mark.asyncio
-    async def test_register_brick_placeholder(self):
+    async def test_register_brick_invalid_module_raises_error(self):
         registry = KadeiaRegistry()
         manifest = BrickManifest(
-            name="x", version="1", type="tool", description="", download_url="u"
+            name="x", version="1", type="tool",
+            description="", download_url="https://kadeia.co/bricks/no.such.module",
         )
-        result = await registry.register_brick(manifest, "fake_registry")
-        assert result is True
+        from brikie.bricks.registry.kadeia_registry import KadeiaRegistryError
+        with pytest.raises(KadeiaRegistryError, match="Cannot import"):
+            await registry.register_brick(manifest, "fake_registry")
 
     @pytest.mark.asyncio
     async def test_get_json_http_error_raises_kadeia_error(self):

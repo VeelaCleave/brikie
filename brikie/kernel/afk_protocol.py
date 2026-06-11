@@ -6,8 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from brikie.bricks.interface.event_bus import InternalEventBusBrick
-from brikie.bricks.logging.base import LogEntry, LogLevel
-from brikie.bricks.soul.base import SoulBrick
+from brikie.bricks.logging.diagnostics import DiagnosticsCollectorBrick
 from brikie.bricks.soul.dreamer import Dreamer
 from brikie.bricks.soul.sisyphus_orchestrator import SisyphusOrchestrator
 from brikie.config.types import BusEvent
@@ -68,11 +67,13 @@ class AFKProtocolEngine:
         event_bus: InternalEventBusBrick,
         dreamer: Dreamer,
         sisyphus: SisyphusOrchestrator,
+        diagnostics: Optional[DiagnosticsCollectorBrick] = None,
         on_execute: Optional[Callable[[str, Dict[str, Any]], Any]] = None,
     ) -> None:
         self._event_bus = event_bus
         self._dreamer = dreamer
         self._sisyphus = sisyphus
+        self._diagnostics = diagnostics
         self._on_execute = on_execute
         self._cycle = 0
         self._consecutive_failures = 0
@@ -184,38 +185,84 @@ class AFKProtocolEngine:
         return result
 
     async def _dream_phase(self) -> List[Proposal]:
-        """Stage 1: Dreamer reviews state and generates proposals.
+        """Stage 1: Query diagnostics and generate proposals.
 
-        In a real implementation, the Dreamer would query logs, mempalace,
-        and the wiki to formulate proposals. For now, this delegates to
-        the event bus so a real Dreamer soul can respond.
+        Analyzes the last cycle's diagnostics to identify improvement
+        opportunities — error rates, slow tool calls, token usage,
+        and failed proposals from previous cycles.
         """
-        request_event = BusEvent(
-            event_type="dreamer.generate_proposals",
-            source_soul="sisyphus_orchestrator",
-            target_soul="dreamer",
-            payload={
-                "context": {
-                    "cycle": self._cycle,
-                    "consecutive_failures": self._consecutive_failures,
-                },
-                "max_proposals": self._dreamer.behavioral_constraints.get(
-                    "max_proposals_per_cycle", 5
-                ),
-            },
+        max_proposals = self._dreamer.behavioral_constraints.get(
+            "max_proposals_per_cycle", 5
         )
-        await self._event_bus.publish(request_event)
-
-        response = await self._event_bus.consume("sisyphus_orchestrator")
-
-        raw = response.payload.get("proposals", [])
         proposals: List[Proposal] = []
-        for item in raw:
-            if isinstance(item, dict):
-                proposals.append(Proposal(**item))
-            elif isinstance(item, Proposal):
-                proposals.append(item)
-        return proposals
+
+        if self._diagnostics is None:
+            return proposals
+
+        stats = await self._diagnostics.get_session_stats()
+        last_events = await self._diagnostics.get_last_n_events(n=10)
+
+        # Proposal 1: High error/failure rate
+        total_ops = stats.tool_success_count + stats.tool_failure_count
+        if total_ops > 0 and stats.tool_failure_count / total_ops > 0.1:
+            proposals.append(Proposal(
+                title="Investigate elevated tool failure rate",
+                description=(
+                    f"Tool failure rate is {stats.tool_failure_count}/{total_ops} "
+                    f"({stats.tool_failure_count / total_ops * 100:.0f}%). "
+                    "Review recent tool calls and check for recurring errors."
+                ),
+                impact="medium",
+                complexity="low",
+                proposal_id=f"afk-{self._cycle}-failure-rate",
+            ))
+
+        # Proposal 2: High token cost
+        if stats.token_cost > 0.01:
+            proposals.append(Proposal(
+                title="Optimize LLM token usage",
+                description=(
+                    f"Current session token cost: ${stats.token_cost:.4f}. "
+                    f"Total LLM calls: {stats.total_llm_calls}. "
+                    "Consider reducing context window or tuning prompts."
+                ),
+                impact="medium",
+                complexity="medium",
+                proposal_id=f"afk-{self._cycle}-token-cost",
+            ))
+
+        # Proposal 3: Slow tool execution
+        if stats.avg_tool_latency_ms > 5000:
+            proposals.append(Proposal(
+                title="Audit slow tool calls",
+                description=(
+                    f"Average tool latency is {stats.avg_tool_latency_ms:.0f}ms. "
+                    "Review recent tool traces for bottlenecks."
+                ),
+                impact="low",
+                complexity="low",
+                proposal_id=f"afk-{self._cycle}-slow-tools",
+            ))
+
+        # Proposal 4: Repeated failures from previous cycle
+        if self._consecutive_failures > 2:
+            prev_cycle = self._results[-1] if self._results else None
+            if prev_cycle:
+                proposals.append(Proposal(
+                    title="Address recurring proposal failures",
+                    description=(
+                        f"{self._consecutive_failures} consecutive cycles with "
+                        f"zero approved proposals. Last cycle: "
+                        f"{prev_cycle.proposals_count} proposals, "
+                        f"{prev_cycle.approved_count} approved."
+                    ),
+                    impact="high",
+                    complexity="high",
+                    proposal_id=f"afk-{self._cycle}-recurring-failures",
+                ))
+
+        # Return only the first N proposals per soul constraints
+        return proposals[:max_proposals]
 
     async def _evaluate_phase(self, proposal: Proposal) -> bool:
         """Stage 2: Sisyphus evaluates a proposal.

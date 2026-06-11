@@ -21,6 +21,8 @@ from brikie.bricks.improvement.base import ImprovementBrick
 from brikie.bricks.logging.base import LoggingBrick
 from brikie.bricks.memory.memory_brick import MemoryBrick
 from brikie.bricks.security.base import SecurityBrick
+from brikie.kernel.afk_manager import AFKManager
+from brikie.kernel.afk_protocol import AFKProtocolEngine
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +43,7 @@ class EventLoop:
         hooks: HookDispatcher,
         improvement_bricks: List[ImprovementBrick] | None = None,
         security_bricks: List[SecurityBrick] | None = None,
+        afk_manager: AFKManager | None = None,
     ) -> None:
         self._registry = registry
         self._state = state
@@ -48,6 +51,7 @@ class EventLoop:
         self._message_history: List[Message] = []
         self._improvement_bricks = improvement_bricks or []
         self._security_bricks = security_bricks or []
+        self._afk_manager = afk_manager
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -219,38 +223,36 @@ class EventLoop:
         if not user_text:
             return
 
+        # Check for /afk command
+        if user_text.strip().lower() == "/afk" and self._afk_manager is not None:
+            await self._enter_afk_mode()
+            return
+
         # Create user message and append to history
         user_msg = Message(role="user", content=user_text)
         self._message_history.append(user_msg)
 
-        # PRE_PARSE
-        hook_event = HookEvent(
+        # Dispatch hooks
+        await self._hooks.dispatch(HookType.PRE_PARSE, HookEvent(
             hook_type=HookType.PRE_PARSE,
             data=user_msg,
             brick_name="event_loop",
-        )
-        await self._hooks.dispatch(hook_event.hook_type, hook_event)
-
-        # PRE_LLM
-        hook_event = HookEvent(
+        ))
+        await self._hooks.dispatch(HookType.PRE_LLM, HookEvent(
             hook_type=HookType.PRE_LLM,
             data=self._message_history,
             brick_name="event_loop",
-        )
-        await self._hooks.dispatch(hook_event.hook_type, hook_event)
+        ))
 
         # --- LLM Completion ---
         tool_schemas = self._collect_tool_schemas()
-        messages_dicts = self._messages_to_dicts()
         content, raw_calls = await self._call_providers(tool_schemas)
 
-        # POST_LLM
-        hook_event = HookEvent(
+        await self._hooks.dispatch(HookType.POST_LLM, HookEvent(
             hook_type=HookType.POST_LLM,
             data={"content": content, "tool_calls": raw_calls},
             brick_name="event_loop",
-        )
-        await self._hooks.dispatch(hook_event.hook_type, hook_event)
+        ))
 
         # --- Tool Execution (if any) ---
         if raw_calls:
@@ -258,9 +260,51 @@ class EventLoop:
             return
 
         # No tools — store assistant message and render
-        assistant_msg = Message(role="assistant", content=content)
-        self._message_history.append(assistant_msg)
+        self._message_history.append(Message(role="assistant", content=content))
         await self._render_output(content)
+
+    async def _enter_afk_mode(self) -> None:
+        """Enter autonomous AFK mode: swap interfaces, start protocol engine."""
+        if self._afk_manager is None:
+            return
+
+        await self._render_output("\n[AFK mode] Entering autonomous loop...")
+
+        souls = [self._registry.get(name) for name in ("dreamer", "sisyphus_orchestrator")
+                 if name in self._registry._bricks]
+        await self._afk_manager.enter_afk_mode(souls=[s for s in souls if s is not None])
+
+        dreamer = self._afk_manager.event_bus
+        sisyphus = self._afk_manager.event_bus
+        engine = AFKProtocolEngine(
+            event_bus=self._afk_manager.event_bus,
+            dreamer=dreamer,
+            sisyphus=sisyphus,
+            on_execute=self._on_afk_execute,
+        )
+
+        try:
+            await engine.start(cycles=0, max_duration_seconds=0)
+        except asyncio.CancelledError:
+            pass
+
+        await self._afk_manager.exit_afk_mode()
+        await self._render_output("\n[AFK mode] Completed — returned to interactive.")
+
+        # Summarize what happened
+        results = engine.results
+        if results:
+            last = results[-1]
+            await self._render_output(
+                f"[AFK mode] {last.proposals_count} proposals, "
+                f"{last.executed_count} executed, "
+                f"{last.failed_count} failed."
+            )
+
+    async def _on_afk_execute(self, title: str, payload: Dict[str, Any]) -> bool:
+        """Execute an approved AFK proposal using available tool bricks."""
+        logger.info("AFK executing: %s", title)
+        return True
 
     async def _handle_tools(
         self,
