@@ -19,6 +19,7 @@ from brikie.bricks.soul.sisyphus_orchestrator import SisyphusOrchestrator
 from brikie.bricks.soul.web_design_agent import WebDesignAgent
 from brikie.bricks.tool.cloakbrowser import CloakBrowserBrick
 from brikie.bricks.tool.dummy import DummyToolBrick
+from brikie.bricks.tool.file_tools import ShellToolBrick
 from brikie.config.brick_numbers import BRICK_NUMBERS, brick_number, bricks_by_category
 
 
@@ -29,6 +30,7 @@ _CONCRETE_BRICKS = [
     (CLIBrick, "BRK-300"),
     (InternalEventBusBrick, "BRK-310"),
     (DummyToolBrick, "BRK-400"),
+    (ShellToolBrick, "BRK-410"),
     (CloakBrowserBrick, "BRK-420"),
     (KadeiaInstallerBrick, "BRK-450"),
     (SisyphusOrchestrator, "BRK-500"),
@@ -69,7 +71,7 @@ class TestBrickNumbers:
 
     def test_registry_count(self):
         """BRICK_NUMBERS dict covers all concrete bricks + ABCs."""
-        assert len(BRICK_NUMBERS) == 27
+        assert len(BRICK_NUMBERS) == 28
 
     def test_all_numbers_have_brk_prefix(self):
         """Every entry should start with BRK-."""
