@@ -216,9 +216,12 @@ class EventLoop:
             brick_name="event_loop",
         ))
 
+        # --- Memory Context Injection ---
+        memory_messages = await self._build_memory_context()
+
         # --- LLM Completion ---
         tool_schemas = self._collect_tool_schemas()
-        content, raw_calls = await self._call_providers(tool_schemas)
+        content, raw_calls = await self._call_providers(tool_schemas, messages=memory_messages)
 
         await self._hooks.dispatch(HookType.POST_LLM, HookEvent(
             hook_type=HookType.POST_LLM,
@@ -275,6 +278,38 @@ class EventLoop:
                 f"{last.executed_count} executed, "
                 f"{last.failed_count} failed."
             )
+
+    async def _build_memory_context(self) -> List[Dict[str, Any]]:
+        """Build the base message list with memory context injected."""
+        messages = self._messages_to_dicts()
+        memory_bricks = self._registry.get_all(MemoryBrick)
+        if not memory_bricks:
+            return messages
+
+        session_id = await self._state.get("session_id", "default")
+        context_parts: List[str] = []
+        for brick in memory_bricks:
+            ctx = await brick.build_context(session_id)
+            if ctx:
+                summaries = ctx.get("summaries", [])
+                tail = ctx.get("tail", [])
+                if summaries:
+                    context_parts.append("## Session Summary")
+                    for s in summaries:
+                        context_parts.append(f"[DAG depth={s.get('depth',0)}] {s.get('content','')}")
+                if tail:
+                    context_parts.append("## Recent Messages")
+                    for t in tail:
+                        context_parts.append(f"[{t.get('role','?')}] {t.get('content','')[:200]}")
+
+        if context_parts:
+            memory_blob = "\n\n".join(context_parts)
+            system_msg = {
+                "role": "system",
+                "content": f"## Memory Context\n{memory_blob}",
+            }
+            return [system_msg] + messages
+        return messages
 
     async def _on_afk_execute(self, title: str, payload: Dict[str, Any]) -> bool:
         """Execute an approved AFK proposal using available tool bricks."""
@@ -339,7 +374,8 @@ class EventLoop:
         ))
 
         # Continue: LLM processes tool results
-        content, more_raw = await self._call_providers(self._collect_tool_schemas())
+        memory_messages = await self._build_memory_context()
+        content, more_raw = await self._call_providers(self._collect_tool_schemas(), messages=memory_messages)
 
         if more_raw:
             await self._handle_tools(more_raw, depth + 1)
@@ -353,34 +389,26 @@ class EventLoop:
     # ------------------------------------------------------------------
 
     async def process_tool_calls(self, tool_calls: List[ToolCall]) -> List[ToolCall]:
-        """Execute each tool call using registered ToolBricks.
-
-        Finds the ToolBrick that provides each tool and runs it.
-        Updates the ToolCall.result field in-place.
-        """
+        """Execute each tool call using registered ToolBricks."""
         tools = self._registry.get_all(ToolBrick)
         for tc in tool_calls:
             executed = False
             for tool_brick in tools:
-                if hasattr(tool_brick, "tools") and tool_brick.tools is not None:
+                tool_list = getattr(tool_brick, "tools", None)
+                if tool_list is not None:
                     if any(
                         s.get("function", {}).get("name") == tc.name
-                        for s in tool_brick.tools
+                        for s in tool_list
                     ):
                         logger.info("Executing tool %s via brick %s", tc.name, tool_brick.name)
-                        result = await tool_brick.execute(tc.name, tc.args)
-                        tc.result = str(result)
-                        executed = True
-                        break
-                # Fallback: try executing directly
-                if not executed:
-                    try:
-                        result = await tool_brick.execute(tc.name, tc.args)
-                        tc.result = str(result)
-                        executed = True
-                        break
-                    except (KeyError, ValueError):
-                        continue
+                        try:
+                            result = await tool_brick.execute(tc.name, tc.args)
+                            tc.result = str(result)
+                            executed = True
+                            break
+                        except (KeyError, ValueError) as exc:
+                            logger.warning("Tool %s execute failed on %s: %s", tc.name, tool_brick.name, exc)
+                            continue
 
             if not executed:
                 tc.result = f"No ToolBrick found for tool '{tc.name}'"
@@ -479,18 +507,32 @@ class EventLoop:
     async def _call_providers(
         self,
         tool_schemas: List[Dict[str, Any]],
+        messages: List[Dict[str, Any]] | None = None,
     ) -> tuple[str, List[Dict[str, Any]]]:
         """Route messages to the first available Provider.
+
+        Args:
+            tool_schemas: Tool definitions to send to the LLM.
+            messages: Optional pre-built message list. If None, builds from history.
 
         Returns (content, raw_tool_call_dicts).
         """
         providers = self._registry.get_all(ProviderBrick)
-        messages = self._messages_to_dicts()
+        if messages is None:
+            messages = self._messages_to_dicts()
+        errors: List[str] = []
         for provider in providers:
             try:
                 return await provider.get_completion(messages, tool_schemas)
             except Exception as exc:
+                msg = f"{provider.name}: {exc}"
                 logger.error("Provider %s failed: %s", provider.name, exc)
+                errors.append(msg)
+        if errors:
+            error_text = "All providers failed:\n" + "\n".join(errors)
+            logger.critical(error_text)
+            await self._render_output(f"[system error] {error_text}")
+            return "", []
         return "", []
 
     # ------------------------------------------------------------------

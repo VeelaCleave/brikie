@@ -9,108 +9,28 @@ All database operations are wrapped in strict try/finally blocks to prevent
 connection leaks in long-running AFK loops.
 """
 
-import aiosqlite
 import logging
 import uuid
 from pathlib import Path
 
+from brikie.bricks.memory.sqlite_pool import VersionedConnectionPool
+
 logger = logging.getLogger(__name__)
 
 
-class MempalaceConnectionPool:
+class MempalaceConnectionPool(VersionedConnectionPool):
     """Manages SQLite connections for the MemPalace store."""
 
+    SCHEMA_VERSION = 1
+    MIGRATIONS = {}
+    DB_FILENAME = "mempalace.db"
+
     def __init__(self, db_path: str) -> None:
-        self._db_path = db_path
-        self._initialized = False
+        super().__init__(db_path)
 
     def _get_schema_path(self) -> Path:
         module_dir = Path(__file__).resolve().parent
         return module_dir / "schema.sql"
-
-    async def initialize(self) -> None:
-        """Create the database and apply the schema."""
-        schema_path = self._get_schema_path()
-        conn = None
-        try:
-            conn = await aiosqlite.connect(self._db_path)
-            try:
-                await conn.execute("PRAGMA journal_mode=WAL")
-                await conn.execute("PRAGMA foreign_keys=ON")
-                await conn.execute("PRAGMA busy_timeout=500")
-
-                if schema_path.exists():
-                    schema_sql = schema_path.read_text(encoding="utf-8")
-                    await conn.executescript(schema_sql)
-                await conn.commit()
-                self._initialized = True
-                logger.info("MempalaceStore: schema initialized at %s", self._db_path)
-            except Exception:
-                await conn.rollback()
-                raise
-        except Exception as exc:
-            logger.error("MempalaceStore: initialization failed: %s", exc)
-            raise
-        finally:
-            if conn is not None:
-                await conn.close()
-
-    async def shutdown(self) -> None:
-        """Close any open connections."""
-        self._initialized = False
-        logger.info("MempalaceStore: shutdown complete")
-
-    async def _execute(self, query: str, params: tuple, fetch: str = "one"):
-        """Execute a single query and return the result."""
-        conn = None
-        try:
-            conn = await aiosqlite.connect(self._db_path)
-            try:
-                cursor = await conn.execute(query, params)
-                if fetch == "value":
-                    row = await cursor.fetchone()
-                    return row[0] if row else None
-                elif fetch == "one":
-                    return await cursor.fetchone()
-                else:
-                    return await cursor.fetchall()
-            except Exception as exc:
-                await conn.rollback()
-                raise
-            finally:
-                await conn.commit()
-        finally:
-            if conn is not None:
-                await conn.close()
-
-    async def _execute_many(self, query: str, params_list):
-        """Execute a batch of queries."""
-        conn = None
-        try:
-            conn = await aiosqlite.connect(self._db_path)
-            try:
-                await conn.executemany(query, params_list)
-                await conn.commit()
-            except Exception:
-                await conn.rollback()
-                raise
-        finally:
-            if conn is not None:
-                await conn.close()
-
-    async def _insert(self, query: str, params: tuple) -> None:
-        conn = None
-        try:
-            conn = await aiosqlite.connect(self._db_path)
-            try:
-                await conn.execute(query, params)
-                await conn.commit()
-            except Exception:
-                await conn.rollback()
-                raise
-        finally:
-            if conn is not None:
-                await conn.close()
 
 
 class MempalaceStore:

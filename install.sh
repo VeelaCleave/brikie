@@ -31,11 +31,17 @@ if [ ! -d .venv ]; then
     "$PYTHON" -m venv .venv
 fi
 
-source .venv/bin/activate 2>/dev/null || true
+if [ -f .venv/bin/activate ]; then
+    # shellcheck disable=SC1091
+    source .venv/bin/activate
+else
+    echo "ERROR: Virtual environment not found at .venv"
+    exit 1
+fi
 
-pip3 install --quiet --upgrade pip setuptools wheel
-pip3 install --quiet -e ".[dev]" --no-deps
-pip3 install --quiet httpx rich aiosqlite pydantic tiktoken PyYAML pytest pytest-asyncio
+pip install --quiet --upgrade pip setuptools wheel
+pip install --quiet -e ".[dev]"
+pip install --quiet httpx rich aiosqlite pydantic tiktoken PyYAML pytest pytest-asyncio
 
 echo "  Done."
 echo ""

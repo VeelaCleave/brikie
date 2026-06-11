@@ -89,16 +89,20 @@ async def main() -> None:
         print(f"[brikie] Error loading Build Set: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    # Apply CLI overrides to all provider bricks in the set
-    for brick in registry.get_all(type(registry).__class__):
-        if hasattr(brick, "_model") and (args.model != "gpt-4o" or args.base_url != "https://api.openai.com/v1"):
-            if args.model:
-                brick._model = args.model
-            if args.base_url:
-                brick._base_url = args.base_url
+    # Apply CLI overrides to all provider bricks
+    from brikie.kernel.registry import ProviderBrick
+    has_overrides = args.model != "gpt-4o" or args.base_url != "https://api.openai.com/v1" or bool(args.api_key)
+    for brick in registry.get_all(ProviderBrick):
+        if not has_overrides:
+            break
+        if args.model:
+            brick._model = args.model
+        if args.base_url:
+            brick._base_url = args.base_url
+            if hasattr(brick, "_client") and brick._client is not None:
                 brick._client.base_url = args.base_url
-            if args.api_key:
-                brick._api_key = args.api_key
+        if args.api_key:
+            brick._api_key = args.api_key
 
     loop = EventLoop(
         registry=registry,
