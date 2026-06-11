@@ -99,13 +99,8 @@ class EventLoop:
         # Register memory brick hooks for LCM integration
         self._register_memory_hooks()
 
-        # Register logging brick hooks for diagnostics
-        self._register_logging_hooks()
-
-        # Register improvement brick hooks for auto-fix
-        self._register_improvement_hooks()
-
-        # Register security brick hooks for firewalling and sandboxing
+        await self._register_logging_hooks()
+        await self._register_improvement_hooks()
         self._register_security_hooks()
 
     def _register_memory_hooks(self) -> None:
@@ -136,24 +131,14 @@ class EventLoop:
         Intercepts the message history and stores each message in LCM.
         Builds compressed context before LLM calls.
         """
-        # Session ID — use "default" if not set in state
-        session_id = self._state.get("session_id", "default")
-        # Ensure session exists and build context
+        session_id = await self._state.get("session_id", "default")
         context = await brick.build_context(session_id)
-        # Store is handled by the brick's intercept_message
-        # No need to modify the event flow here
         return context
 
-    def _register_logging_hooks(self) -> None:
-        """Register LoggingBrick hook callbacks with the hook dispatcher.
-
-        Logging Bricks expose their callbacks via get_hook_callbacks().
-        The EventLoop reads these and registers each callback at the
-        appropriate hook stage during warm-up.
-        """
+    async def _register_logging_hooks(self) -> None:
         logging_bricks = self._registry.get_all(LoggingBrick)
         for brick in logging_bricks:
-            callbacks = brick.get_hook_callbacks()
+            callbacks = await brick.get_hook_callbacks()
             for hook_type, cb_list in callbacks.items():
                 for cb in cb_list:
                     self._hooks.register(hook_type, cb)
@@ -163,15 +148,9 @@ class EventLoop:
                 brick.name,
             )
 
-    def _register_improvement_hooks(self) -> None:
-        """Register ImprovementBrick hook callbacks with the hook dispatcher.
-
-        Improvement Bricks are passed explicitly to EventLoop (not registered
-        in the BrickRegistry's Brick union) because they need access to the
-        registry for re-executing fixed tool calls.
-        """
+    async def _register_improvement_hooks(self) -> None:
         for brick in self._improvement_bricks:
-            callbacks = brick.get_hook_callbacks()
+            callbacks = await brick.get_hook_callbacks()
             for hook_type, cb_list in callbacks.items():
                 for cb in cb_list:
                     self._hooks.register(hook_type, cb)
@@ -182,11 +161,6 @@ class EventLoop:
             )
 
     def _register_security_hooks(self) -> None:
-        """Register SecurityBrick hook callbacks with the hook dispatcher.
-
-        Security Bricks hook PRE_TOOL to evaluate tool calls before
-        execution and potentially BLOCK dangerous commands.
-        """
         for brick in self._security_bricks:
             callbacks = brick.get_hook_callbacks()
             for hook_type, cb_list in callbacks.items():
@@ -204,7 +178,7 @@ class EventLoop:
         Stores the assistant's response in LCM and checks if compaction
         is needed based on budget thresholds.
         """
-        session_id = self._state.get("session_id", "default")
+        session_id = await self._state.get("session_id", "default")
         if isinstance(data, dict):
             content = data.get("content", "")
             await brick.intercept_message(session_id, "assistant", content)

@@ -8,6 +8,8 @@ import asyncio
 import copy
 from typing import Any, Dict, List
 
+_sentinel = object()
+
 
 class StateManager:
     """Versioned, async-safe state container.
@@ -20,21 +22,12 @@ class StateManager:
         self._versioned_dict: Dict[str, Any] = {}
         self._lock = asyncio.Lock()
 
-    async def get(self, key: str) -> Any:
-        """Retrieve a value by key.
-
-        Args:
-            key: The state key to look up.
-
-        Returns:
-            The stored value, or the current value of `default` if not found.
-
-        Raises:
-            KeyError: If the key is absent and no default is provided.
-        """
+    async def get(self, key: str, default: Any = _sentinel) -> Any:
         async with self._lock:
             if key in self._versioned_dict:
                 return self._versioned_dict[key]
+            if default is not _sentinel:
+                return default
             raise KeyError(key)
 
     async def set(self, key: str, value: Any) -> None:
