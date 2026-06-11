@@ -65,14 +65,14 @@ class AFKProtocolEngine:
     def __init__(
         self,
         event_bus: InternalEventBusBrick,
-        dreamer: Dreamer,
-        sisyphus: SisyphusOrchestrator,
+        dreamer_soul: Optional[Dreamer] = None,
+        sisyphus_soul: Optional[SisyphusOrchestrator] = None,
         diagnostics: Optional[DiagnosticsCollectorBrick] = None,
         on_execute: Optional[Callable[[str, Dict[str, Any]], Any]] = None,
     ) -> None:
         self._event_bus = event_bus
-        self._dreamer = dreamer
-        self._sisyphus = sisyphus
+        self._dreamer_soul = dreamer_soul
+        self._sisyphus_soul = sisyphus_soul
         self._diagnostics = diagnostics
         self._on_execute = on_execute
         self._cycle = 0
@@ -191,7 +191,7 @@ class AFKProtocolEngine:
         opportunities — error rates, slow tool calls, token usage,
         and failed proposals from previous cycles.
         """
-        max_proposals = self._dreamer.behavioral_constraints.get(
+        max_proposals = self._dreamer_soul.behavioral_constraints.get(
             "max_proposals_per_cycle", 5
         )
         proposals: List[Proposal] = []
@@ -271,7 +271,7 @@ class AFKProtocolEngine:
         Returns True if approved.
         """
         max_attempts = min(
-            self._sisyphus.behavioral_constraints.get("max_subagents", 3),
+            self._sisyphus_soul.behavioral_constraints.get("max_subagents", 3),
             3,
         )
 

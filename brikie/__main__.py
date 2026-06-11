@@ -110,6 +110,17 @@ async def main() -> None:
         hooks=hooks,
     )
 
+    # Pass provider info and brick count to CLI
+    from brikie.kernel.registry import ProviderBrick as ProviderBrickABC
+    for b in registry._bricks.values():
+        if hasattr(b, "set_provider_info"):
+            for p in registry.get_all(ProviderBrickABC):
+                if hasattr(p, "_model"):
+                    b.set_provider_info(getattr(p, "_model", "unknown"), type(p).__name__)
+            if hasattr(b, "set_brick_count"):
+                b.set_brick_count(len(registry._bricks))
+            break
+
     try:
         await loop.run()
     except (KeyboardInterrupt, EOFError):

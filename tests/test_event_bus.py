@@ -240,8 +240,8 @@ class TestAFKProtocolEngine:
         bus = InternalEventBusBrick()
         engine = AFKProtocolEngine(
             event_bus=bus,
-            dreamer=Dreamer(),
-            sisyphus=SisyphusOrchestrator(),
+            dreamer_soul=Dreamer(),
+            sisyphus_soul=SisyphusOrchestrator(),
         )
         assert engine.running is False
         engine.stop()
@@ -251,8 +251,8 @@ class TestAFKProtocolEngine:
         bus = InternalEventBusBrick()
         engine = AFKProtocolEngine(
             event_bus=bus,
-            dreamer=Dreamer(),
-            sisyphus=SisyphusOrchestrator(),
+            dreamer_soul=Dreamer(),
+            sisyphus_soul=SisyphusOrchestrator(),
         )
         assert engine.cycle_count == 0
         assert engine.results == []

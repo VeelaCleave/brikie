@@ -32,7 +32,7 @@ class HTTPProvider(ProviderBrick):
         api_key: str = "sk-placeholder",
         base_url: str = "https://api.openai.com/v1",
         api_format: str = FORMAT_OPENAI,
-        timeout: float = 30.0,
+        timeout: float = 120.0,
     ) -> None:
         super().__init__()
         self._name = "http_provider"

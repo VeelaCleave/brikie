@@ -34,6 +34,8 @@ class EventLoop:
       execute tool calls, and render output.
     """
 
+    MAX_CONSECUTIVE_TOOL_LOOPS = 3
+
     def __init__(
         self,
         registry: BrickRegistry,
@@ -50,6 +52,7 @@ class EventLoop:
         self._improvement_bricks = improvement_bricks or []
         self._security_bricks = security_bricks or []
         self._afk_manager = afk_manager
+        self._consecutive_tool_loops = 0
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -204,6 +207,11 @@ class EventLoop:
         user_msg = Message(role="user", content=user_text)
         self._message_history.append(user_msg)
 
+        # Render user message in TUI
+        for iface in self._registry.get_all(InterfaceBrick):
+            if hasattr(iface, "render_user_message"):
+                await iface.render_user_message(user_text)
+
         # Dispatch hooks
         await self._hooks.dispatch(HookType.PRE_PARSE, HookEvent(
             hook_type=HookType.PRE_PARSE,
@@ -234,8 +242,12 @@ class EventLoop:
             await self._handle_tools(raw_calls)
             return
 
-        # No tools — store assistant message and render
+        # No tools — reset tool loop counter and render
+        self._consecutive_tool_loops = 0
         self._message_history.append(Message(role="assistant", content=content))
+        for iface in self._registry.get_all(InterfaceBrick):
+            if hasattr(iface, "render_assistant_response"):
+                await iface.render_assistant_response(content)
         await self._render_output(content)
 
     async def _enter_afk_mode(self) -> None:
@@ -252,12 +264,12 @@ class EventLoop:
                  if name in self._registry._bricks]
         await self._afk_manager.enter_afk_mode(souls=[s for s in souls if s is not None])
 
-        dreamer = self._afk_manager.event_bus
-        sisyphus = self._afk_manager.event_bus
+        dreamer_soul = next((s for s in souls if s and s.name == "dreamer"), None)
+        sisyphus_soul = next((s for s in souls if s and s.name == "sisyphus_orchestrator"), None)
         engine = AFKProtocolEngine(
             event_bus=self._afk_manager.event_bus,
-            dreamer=dreamer,
-            sisyphus=sisyphus,
+            dreamer_soul=dreamer_soul,
+            sisyphus_soul=sisyphus_soul,
             on_execute=self._on_afk_execute,
         )
 
@@ -323,11 +335,27 @@ class EventLoop:
     ) -> None:
         """Process tool calls, then get the LLM to continue."""
         if depth > 10:
-            logger.warning("Tool-call depth limit reached (10).")
-            self._message_history.append(
-                Message(role="assistant", content="Tool-call loop detected.")
+            self._consecutive_tool_loops += 1
+            logger.warning(
+                "Tool-call depth limit reached (10). Consecutive loops: %d/%d",
+                self._consecutive_tool_loops, self.MAX_CONSECUTIVE_TOOL_LOOPS,
             )
-            await self._render_output("Tool-call loop detected.")
+            if self._consecutive_tool_loops >= self.MAX_CONSECUTIVE_TOOL_LOOPS:
+                msg = (
+                    "Persistent tool loop detected — breaking out. "
+                    "Please try a different approach or clarify your request."
+                )
+                self._message_history.append(
+                    Message(role="assistant", content=msg)
+                )
+                await self._render_output(msg)
+                self._consecutive_tool_loops = 0
+                return
+
+            self._message_history.append(
+                Message(role="assistant", content="Tool-call loop detected — retrying.")
+            )
+            await self._render_output("Tool-call loop detected — retrying.")
             return
 
         # Store the assistant message with tool calls in history
@@ -340,6 +368,11 @@ class EventLoop:
 
         # Convert raw tool-call dicts to ToolCall objects, preserving call IDs
         tool_calls = self._raw_to_tool_calls(raw_calls)
+
+        # Render tool calls in TUI before execution
+        for iface in self._registry.get_all(InterfaceBrick):
+            if hasattr(iface, "render_tool_calls"):
+                await iface.render_tool_calls(raw_calls)
 
         # PRE_TOOL
         await self._hooks.dispatch(HookType.PRE_TOOL, HookEvent(
@@ -357,6 +390,13 @@ class EventLoop:
             data=tool_calls,
             brick_name="event_loop",
         ))
+
+        # Render tool results in TUI
+        for tc in tool_calls:
+            if tc.result and tc.name:
+                for iface in self._registry.get_all(InterfaceBrick):
+                    if hasattr(iface, "render_tool_result"):
+                        await iface.render_tool_result(tc.name, tc.args, tc.result)
 
         # Store tool results — use the actual call ID from the LLM response
         for tc in tool_calls:
@@ -382,6 +422,9 @@ class EventLoop:
             return
 
         self._message_history.append(Message(role="assistant", content=content))
+        for iface in self._registry.get_all(InterfaceBrick):
+            if hasattr(iface, "render_assistant_response"):
+                await iface.render_assistant_response(content)
         await self._render_output(content)
 
     # ------------------------------------------------------------------
