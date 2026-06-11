@@ -33,6 +33,7 @@ from brikie.bricks.tool import ToolBrick
 from brikie.bricks.soul import SoulBrick
 from brikie.bricks.memory import MemoryBrick
 from brikie.bricks.improvement import ImprovementBrick
+from brikie.bricks.security import SecurityBrick
 
 __all__ = [
     "InterfaceBrick",
@@ -42,6 +43,7 @@ __all__ = [
     "MemoryBrick",
     "LoggingBrick",
     "ImprovementBrick",
+    "SecurityBrick",
     "discover_bricks",
 ]
 
@@ -53,6 +55,7 @@ BRICK_SUBPACKAGES: Dict[str, str] = {
     "memory": "brikie.bricks.memory",
     "logging": "brikie.bricks.logging",
     "improvement": "brikie.bricks.improvement",
+    "security": "brikie.bricks.security",
     "registry": "brikie.bricks.registry",
 }
 

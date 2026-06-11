@@ -20,6 +20,7 @@ from brikie.kernel.state import StateManager
 from brikie.bricks.improvement.base import ImprovementBrick
 from brikie.bricks.logging.base import LoggingBrick
 from brikie.bricks.memory.memory_brick import MemoryBrick
+from brikie.bricks.security.base import SecurityBrick
 
 logger = logging.getLogger(__name__)
 
@@ -39,12 +40,14 @@ class EventLoop:
         state: StateManager,
         hooks: HookDispatcher,
         improvement_bricks: List[ImprovementBrick] | None = None,
+        security_bricks: List[SecurityBrick] | None = None,
     ) -> None:
         self._registry = registry
         self._state = state
         self._hooks = hooks
         self._message_history: List[Message] = []
         self._improvement_bricks = improvement_bricks or []
+        self._security_bricks = security_bricks or []
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -99,6 +102,9 @@ class EventLoop:
 
         # Register improvement brick hooks for auto-fix
         self._register_improvement_hooks()
+
+        # Register security brick hooks for firewalling and sandboxing
+        self._register_security_hooks()
 
     def _register_memory_hooks(self) -> None:
         """Register MemoryBrick callbacks with the hook dispatcher.
@@ -169,6 +175,23 @@ class EventLoop:
                     self._hooks.register(hook_type, cb)
             logger.info(
                 "Registered improvement brick: %s (%d callback(s))",
+                brick.name,
+                sum(len(v) for v in callbacks.values()),
+            )
+
+    def _register_security_hooks(self) -> None:
+        """Register SecurityBrick hook callbacks with the hook dispatcher.
+
+        Security Bricks hook PRE_TOOL to evaluate tool calls before
+        execution and potentially BLOCK dangerous commands.
+        """
+        for brick in self._security_bricks:
+            callbacks = brick.get_hook_callbacks()
+            for hook_type, cb_list in callbacks.items():
+                for cb in cb_list:
+                    self._hooks.register(hook_type, cb)
+            logger.info(
+                "Registered security brick: %s (%d callback(s))",
                 brick.name,
                 sum(len(v) for v in callbacks.values()),
             )
