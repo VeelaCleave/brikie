@@ -21,8 +21,6 @@ from brikie.bricks.improvement.base import ImprovementBrick
 from brikie.bricks.logging.base import LoggingBrick
 from brikie.bricks.memory.memory_brick import MemoryBrick
 from brikie.bricks.security.base import SecurityBrick
-from brikie.kernel.afk_manager import AFKManager
-from brikie.kernel.afk_protocol import AFKProtocolEngine
 
 logger = logging.getLogger(__name__)
 
@@ -41,9 +39,9 @@ class EventLoop:
         registry: BrickRegistry,
         state: StateManager,
         hooks: HookDispatcher,
-        improvement_bricks: List[ImprovementBrick] | None = None,
-        security_bricks: List[SecurityBrick] | None = None,
-        afk_manager: AFKManager | None = None,
+        improvement_bricks: "List[ImprovementBrick] | None" = None,
+        security_bricks: "List[SecurityBrick] | None" = None,
+        afk_manager: "AFKManager | None" = None,
     ) -> None:
         self._registry = registry
         self._state = state
@@ -265,6 +263,9 @@ class EventLoop:
 
     async def _enter_afk_mode(self) -> None:
         """Enter autonomous AFK mode: swap interfaces, start protocol engine."""
+        from brikie.kernel.afk_manager import AFKManager
+        from brikie.kernel.afk_protocol import AFKProtocolEngine
+
         if self._afk_manager is None:
             return
 

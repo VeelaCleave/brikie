@@ -4,7 +4,6 @@ import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 
-from brikie.bricks.interface.cli import CLIBrick
 from brikie.bricks.interface.event_bus import InternalEventBusBrick
 from brikie.bricks.soul.base import SoulBrick
 from brikie.config.types import AFKMode, BrickState
@@ -52,7 +51,7 @@ class AFKManager:
         # Find and unregister CLI interface
         interfaces = self._registry.get_all(InterfaceBrick)
         for iface in interfaces:
-            if iface.name == "cli" or isinstance(iface, CLIBrick):
+            if iface.name == "cli":
                 try:
                     self._registry.unregister(iface.name)
                     logger.info("Unregistered CLI interface: %s", iface.name)
