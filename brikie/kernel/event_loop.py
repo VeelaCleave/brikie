@@ -17,6 +17,7 @@ from brikie.config.types import HookEvent, HookType, Message, ToolCall
 from brikie.kernel.hooks import HookDispatcher
 from brikie.kernel.registry import BrickRegistry, InterfaceBrick, ProviderBrick, ToolBrick
 from brikie.kernel.state import StateManager
+from brikie.bricks.improvement.base import ImprovementBrick
 from brikie.bricks.logging.base import LoggingBrick
 from brikie.bricks.memory.memory_brick import MemoryBrick
 
@@ -37,11 +38,13 @@ class EventLoop:
         registry: BrickRegistry,
         state: StateManager,
         hooks: HookDispatcher,
+        improvement_bricks: List[ImprovementBrick] | None = None,
     ) -> None:
         self._registry = registry
         self._state = state
         self._hooks = hooks
         self._message_history: List[Message] = []
+        self._improvement_bricks = improvement_bricks or []
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -93,6 +96,9 @@ class EventLoop:
 
         # Register logging brick hooks for diagnostics
         self._register_logging_hooks()
+
+        # Register improvement brick hooks for auto-fix
+        self._register_improvement_hooks()
 
     def _register_memory_hooks(self) -> None:
         """Register MemoryBrick callbacks with the hook dispatcher.
@@ -147,6 +153,24 @@ class EventLoop:
                 "Registered %d hook callback(s) for logging brick: %s",
                 sum(len(v) for v in callbacks.values()),
                 brick.name,
+            )
+
+    def _register_improvement_hooks(self) -> None:
+        """Register ImprovementBrick hook callbacks with the hook dispatcher.
+
+        Improvement Bricks are passed explicitly to EventLoop (not registered
+        in the BrickRegistry's Brick union) because they need access to the
+        registry for re-executing fixed tool calls.
+        """
+        for brick in self._improvement_bricks:
+            callbacks = brick.get_hook_callbacks()
+            for hook_type, cb_list in callbacks.items():
+                for cb in cb_list:
+                    self._hooks.register(hook_type, cb)
+            logger.info(
+                "Registered improvement brick: %s (%d callback(s))",
+                brick.name,
+                sum(len(v) for v in callbacks.values()),
             )
 
     async def _memory_post_llm(self, brick: MemoryBrick, data: Any) -> None:

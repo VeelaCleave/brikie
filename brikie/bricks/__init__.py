@@ -6,12 +6,14 @@ at runtime via pluggy entry-point metadata or filesystem scanning —
 never by hardcoded import path.
 
 Submodules (each is independently importable):
-    provider  — LLM providers (HTTP, local, WebSocket).
-    interface — Human/system communication (CLI, Web UI).
-    tool      — Agent actions on the environment.
-    soul      — Persona manifests for agent identity.
-    registry  — Remote brick registry (Kadeia) client and installer.
-    memory    — Memory subsystems (LCM, MemPalace, LLM Wiki).
+    provider    — LLM providers (HTTP, local, WebSocket).
+    interface   — Human/system communication (CLI, Web UI).
+    tool        — Agent actions on the environment.
+    soul        — Persona manifests for agent identity.
+    registry    — Remote brick registry (Kadeia) client and installer.
+    memory      — Memory subsystems (LCM, MemPalace, LLM Wiki).
+    logging     — Diagnostics, token accounting, and call tracing.
+    improvement — Self-healing middleware for auto-fixing tool calls.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ from brikie.bricks.provider import ProviderBrick
 from brikie.bricks.tool import ToolBrick
 from brikie.bricks.soul import SoulBrick
 from brikie.bricks.memory import MemoryBrick
+from brikie.bricks.improvement import ImprovementBrick
 
 __all__ = [
     "InterfaceBrick",
@@ -38,6 +41,7 @@ __all__ = [
     "SoulBrick",
     "MemoryBrick",
     "LoggingBrick",
+    "ImprovementBrick",
     "discover_bricks",
 ]
 
@@ -48,6 +52,7 @@ BRICK_SUBPACKAGES: Dict[str, str] = {
     "soul": "brikie.bricks.soul",
     "memory": "brikie.bricks.memory",
     "logging": "brikie.bricks.logging",
+    "improvement": "brikie.bricks.improvement",
     "registry": "brikie.bricks.registry",
 }
 
