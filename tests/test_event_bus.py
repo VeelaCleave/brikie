@@ -7,8 +7,11 @@ import pytest
 from brikie.bricks.interface.event_bus import InternalEventBusBrick
 from brikie.bricks.interface.base import InterfaceBrick
 from brikie.bricks.soul.base import SoulBrick
+from brikie.bricks.soul.dreamer import Dreamer
+from brikie.bricks.soul.sisyphus_orchestrator import SisyphusOrchestrator
 from brikie.config.types import AFKMode, BrickState, BusEvent
 from brikie.kernel.afk_manager import AFKManager
+from brikie.kernel.afk_protocol import AFKProtocolEngine, AFKCycleResult, Proposal
 from brikie.kernel.registry import BrickRegistry
 
 
@@ -216,3 +219,40 @@ class TestAFKManager:
         assert "dreamer" in manager.event_bus._queues
         assert "sisyphus_orchestrator" in manager.event_bus._queues
         await manager.exit_afk_mode()
+
+
+# ── AFKProtocolEngine ──────────────────────────────────────────────────
+
+
+class TestAFKProtocolEngine:
+    def test_proposal_defaults(self):
+        p = Proposal()
+        assert p.status == "pending"
+        assert p.title == ""
+
+    def test_cycle_result_defaults(self):
+        r = AFKCycleResult()
+        assert r.cycle_number == 0
+        assert r.proposals_count == 0
+        assert r.executed_count == 0
+
+    def test_stop_before_start(self):
+        bus = InternalEventBusBrick()
+        engine = AFKProtocolEngine(
+            event_bus=bus,
+            dreamer=Dreamer(),
+            sisyphus=SisyphusOrchestrator(),
+        )
+        assert engine.running is False
+        engine.stop()
+        assert engine.running is False
+
+    def test_results_and_cycle_empty_before_running(self):
+        bus = InternalEventBusBrick()
+        engine = AFKProtocolEngine(
+            event_bus=bus,
+            dreamer=Dreamer(),
+            sisyphus=SisyphusOrchestrator(),
+        )
+        assert engine.cycle_count == 0
+        assert engine.results == []
