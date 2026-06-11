@@ -29,7 +29,7 @@ class LintViolation:
 class WikiLinter:
     """Runs structural checks against a WikiStore instance."""
 
-    REQUIRED_FIELDMATTER_FIELDS = ["title", "created", "updated", "status", "tags"]
+    REQUIRED_FIELDMATTER_FIELDS = ["title", "created_at", "updated_at", "status", "tags"]
 
     _LINK_RE = re.compile(r"\[\[(.+?)\]\]")
 

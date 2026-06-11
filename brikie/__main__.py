@@ -16,7 +16,7 @@ import os
 import sys
 from typing import Any, Dict, List
 
-from brikie.config.types import HookType
+from brikie.kernel.event_loop import EventLoop
 from brikie.kernel.hooks import HookDispatcher
 from brikie.kernel.registry import BrickRegistry, InterfaceBrick, ProviderBrick, ToolBrick
 from brikie.kernel.state import StateManager
@@ -93,82 +93,8 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
 
 
 # ---------------------------------------------------------------------------
-# Event loop
+# Main
 # ---------------------------------------------------------------------------
-
-
-async def event_loop(
-    registry: BrickRegistry,
-    state: StateManager,
-    hooks: HookDispatcher,
-) -> None:
-    """Run the Baseplate async event loop.
-
-    Each iteration:
-      1. Get input from interface bricks
-      2. Dispatch through the middleware hook pipeline
-      3. Send to provider bricks
-      4. Execute any tool calls
-      5. Output the response
-    """
-    providers: List[ProviderBrick] = registry.get_all(ProviderBrick)
-    interfaces: List[InterfaceBrick] = registry.get_all(InterfaceBrick)
-    tools: List[ToolBrick] = registry.get_all(ToolBrick)
-
-    if not providers:
-        print("[brikie] No provider bricks registered.", file=sys.stderr)
-    if not interfaces:
-        print("[brikie] No interface bricks registered.", file=sys.stderr)
-
-    # Use first provider and interface for the basic loop
-    provider = providers[0]
-    interface = interfaces[0]
-
-    # Build tool schema list from registered tool bricks
-    tool_schemas = [
-        {"name": t.name, "args": {}} for t in tools
-    ]
-
-    conversation_history: List[Dict[str, Any]] = []
-
-    print(f"[brikie] Event loop started. Press Enter on empty line to exit.")
-
-    while True:
-        # 1. Get input
-        user_input = await interface.get_input()
-        if not user_input:
-            break
-
-        await state.set("user_input", user_input)
-        conversation_history.append({"role": "user", "content": user_input})
-
-        # 2. Dispatch hooks
-        await hooks.dispatch_all(user_input)
-
-        # 3. Send to provider
-        response, tool_calls = await provider.get_completion(
-            messages=conversation_history,
-            tools=tool_schemas,
-        )
-
-        # 4. Execute tool calls
-        for tc in tool_calls:
-            tool_name = tc.get("name", "")
-            tool_args = tc.get("args", {})
-            # Find matching tool brick
-            target_tool = next((t for t in tools if t.name == tool_name), tools[0])
-            result = await target_tool.execute(tool_name, tool_args)
-            # Store result in state
-            await state.set(f"tool_result.{tool_name}", result)
-            conversation_history.append({
-                "role": "tool",
-                "content": str(result),
-                "tool_call_id": tc.get("id"),
-            })
-
-        # 5. Output response
-        await interface.output(response)
-        conversation_history.append({"role": "assistant", "content": response})
 
 
 # ---------------------------------------------------------------------------
@@ -213,9 +139,16 @@ async def main() -> None:
     await interface.init()
     await tool.init()
 
-    # Run the event loop
+    # Run the kernel event loop — hooks memory, logging, improvement,
+    # and security bricks automatically during warm-up.
+    loop = EventLoop(
+        registry=registry,
+        state=state,
+        hooks=hooks,
+    )
+
     try:
-        await event_loop(registry, state, hooks)
+        await loop.run()
     except (KeyboardInterrupt, EOFError):
         print("\n[brikie] Shutting down...")
     finally:

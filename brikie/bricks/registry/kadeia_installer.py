@@ -12,6 +12,7 @@ from typing import Any, Dict, List
 
 from brikie.bricks.registry.base import BrickManifest
 from brikie.bricks.registry.kadeia_registry import KadeiaRegistry
+from brikie.bricks.registry.tools import get_kadeia_tools
 from brikie.bricks.tool.base import ToolBrick
 
 logger = logging.getLogger(__name__)
@@ -26,69 +27,7 @@ class KadeiaInstallerBrick(ToolBrick):
         - kadeia_list: List available bricks, optionally filtered by type.
     """
 
-    tools: List[Dict[str, Any]] = [
-        {
-            "type": "function",
-            "function": {
-                "name": "kadeia_search",
-                "description": "Search the Kadeia brick registry for available bricks matching a query. Optionally filter by brick type (soul, tool, provider, interface, memory).",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Free-text search query (e.g. 'orchestrator', 'web design', 'crypto').",
-                        },
-                        "type_filter": {
-                            "type": "string",
-                            "description": "Optional brick type to filter by: 'soul', 'tool', 'provider', 'interface', or 'memory'.",
-                            "enum": ["soul", "tool", "provider", "interface", "memory"],
-                        },
-                    },
-                    "required": ["query"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "kadeia_install",
-                "description": "Download and register a brick from the Kadeia registry by name and optional version.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "name": {
-                            "type": "string",
-                            "description": "Canonical brick name to install (e.g. 'sisyphus_orchestrator').",
-                        },
-                        "version": {
-                            "type": "string",
-                            "description": "Optional semantic version string (e.g. '1.0.0'). Defaults to latest if omitted.",
-                        },
-                    },
-                    "required": ["name"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "kadeia_list",
-                "description": "List all bricks available in the Kadeia registry, optionally filtered by brick type.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "type_filter": {
-                            "type": "string",
-                            "description": "Optional brick type to filter by: 'soul', 'tool', 'provider', 'interface', or 'memory'.",
-                            "enum": ["soul", "tool", "provider", "interface", "memory"],
-                        },
-                    },
-                    "required": [],
-                },
-            },
-        },
-    ]
+    tools: List[Dict[str, Any]] = get_kadeia_tools()
 
     def __init__(self, registry_url: str = "https://kadeia.co/bricks") -> None:
         """Initialize the installer with a KadeiaRegistry client.
