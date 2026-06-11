@@ -1,7 +1,12 @@
-"""Tool Bricks — agent actions on the environment."""
+"""Tool Bricks — agent actions on the environment.
+
+ABCs only — no concrete bricks are exported here.
+Import concrete bricks directly from their modules:
+
+    from brikie.bricks.tool.dummy import DummyToolBrick
+    from brikie.bricks.tool.cloakbrowser import CloakBrowserBrick
+"""
 
 from brikie.bricks.tool.base import ToolBrick
-from brikie.bricks.tool.cloakbrowser import CloakBrowserBrick
-from brikie.bricks.tool.dummy import DummyToolBrick
 
-__all__ = ["ToolBrick", "CloakBrowserBrick", "DummyToolBrick"]
+__all__ = ["ToolBrick"]
