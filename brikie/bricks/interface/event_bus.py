@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 class InternalEventBusBrick(InterfaceBrick):
-    BRICK_NUMBER = "BRK-021"
+    BRICK_NUMBER = "BRK-310"
     """Interface Brick for inter-Soul communication during AFK mode.
 
     Replaces the CLI interface when /afk is activated. Souls publish

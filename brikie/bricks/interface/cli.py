@@ -7,7 +7,7 @@ from rich.console import Console
 
 
 class CLIBrick(InterfaceBrick):
-    BRICK_NUMBER = "BRK-020"
+    BRICK_NUMBER = "BRK-300"
     """Command-line interface Brick using rich for formatting.
 
     Color scheme: user=blue, agent=green, tool=cyan, system=magenta.

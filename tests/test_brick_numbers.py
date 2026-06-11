@@ -25,25 +25,25 @@ from brikie.config.brick_numbers import BRICK_NUMBERS, brick_number, bricks_by_c
 # Every concrete brick must have a BRICK_NUMBER class attribute.
 # The BRICK_NUMBERS dict must be the single source of truth.
 _CONCRETE_BRICKS = [
-    (HTTPProvider, "BRK-010"),
-    (CLIBrick, "BRK-020"),
-    (InternalEventBusBrick, "BRK-021"),
-    (DummyToolBrick, "BRK-030"),
-    (CloakBrowserBrick, "BRK-031"),
-    (KadeiaInstallerBrick, "BRK-032"),
-    (SisyphusOrchestrator, "BRK-040"),
-    (Dreamer, "BRK-041"),
-    (CryptoTradingAgent, "BRK-042"),
-    (WebDesignAgent, "BRK-043"),
-    (LcmBrick, "BRK-050"),
-    (MempalaceBrick, "BRK-051"),
-    (WikiBrick, "BRK-052"),
-    (TokenLoggerBrick, "BRK-060"),
-    (ToolTracerBrick, "BRK-061"),
-    (DiagnosticsCollectorBrick, "BRK-062"),
-    (CommandFirewallBrick, "BRK-070"),
-    (SandboxSecurityBrick, "BRK-071"),
-    (AutoFixerBrick, "BRK-080"),
+    (HTTPProvider, "BRK-200"),
+    (CLIBrick, "BRK-300"),
+    (InternalEventBusBrick, "BRK-310"),
+    (DummyToolBrick, "BRK-400"),
+    (CloakBrowserBrick, "BRK-420"),
+    (KadeiaInstallerBrick, "BRK-450"),
+    (SisyphusOrchestrator, "BRK-500"),
+    (Dreamer, "BRK-510"),
+    (CryptoTradingAgent, "BRK-520"),
+    (WebDesignAgent, "BRK-530"),
+    (LcmBrick, "BRK-600"),
+    (MempalaceBrick, "BRK-610"),
+    (WikiBrick, "BRK-620"),
+    (TokenLoggerBrick, "BRK-700"),
+    (ToolTracerBrick, "BRK-710"),
+    (DiagnosticsCollectorBrick, "BRK-720"),
+    (CommandFirewallBrick, "BRK-800"),
+    (SandboxSecurityBrick, "BRK-810"),
+    (AutoFixerBrick, "BRK-900"),
 ]
 
 
@@ -69,7 +69,6 @@ class TestBrickNumbers:
 
     def test_registry_count(self):
         """BRICK_NUMBERS dict covers all concrete bricks + ABCs."""
-        # 19 concrete + 8 ABCs = 27 total
         assert len(BRICK_NUMBERS) == 27
 
     def test_all_numbers_have_brk_prefix(self):

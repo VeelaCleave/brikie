@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 class KadeiaInstallerBrick(ToolBrick):
-    BRICK_NUMBER = "BRK-032"
+    BRICK_NUMBER = "BRK-450"
     """Tool Brick that wraps the Kadeia registry client as agent tools.
 
     Tools:

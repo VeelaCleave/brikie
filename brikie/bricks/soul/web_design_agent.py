@@ -14,7 +14,7 @@ from brikie.bricks.soul.base import SoulBrick
 
 @dataclass
 class WebDesignAgent(SoulBrick):
-    BRICK_NUMBER = "BRK-043"
+    BRICK_NUMBER = "BRK-530"
     """Web Design Agent — UI/UX design for CSS/HTML/React components.
 
     This persona generates frontend code with a strong opinion about

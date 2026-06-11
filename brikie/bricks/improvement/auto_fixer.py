@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 class AutoFixerBrick(ImprovementBrick):
-    BRICK_NUMBER = "BRK-080"
+    BRICK_NUMBER = "BRK-900"
     """Auto Tool-Call Fixing Improvement Brick.
 
     Hooks POST_TOOL_CALL and attempts to repair failed tool calls
