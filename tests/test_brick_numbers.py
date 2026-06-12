@@ -10,7 +10,7 @@ from brikie.bricks.memory.lcm.lcm_brick import LcmBrick
 from brikie.bricks.memory.mempalace.mempalace_brick import MempalaceBrick
 from brikie.bricks.memory.wiki.wiki_brick import WikiBrick
 from brikie.bricks.provider.http_provider import HTTPProvider
-from brikie.bricks.registry.kadeia_installer import KadeiaInstallerBrick
+from brikie.bricks.registry.installer import RegistryInstallerBrick
 from brikie.bricks.security.firewall import CommandFirewallBrick
 from brikie.bricks.security.sandbox import SandboxSecurityBrick
 from brikie.bricks.soul.crypto_trading_agent import CryptoTradingAgent
@@ -33,7 +33,7 @@ _CONCRETE_BRICKS = [
     (DummyToolBrick, "BRK-400"),
     (ShellToolBrick, "BRK-410"),
     (CloakBrowserBrick, "BRK-420"),
-    (KadeiaInstallerBrick, "BRK-450"),
+    (RegistryInstallerBrick, "BRK-450"),
     (Foreman, "BRK-500"),
     (Dreamer, "BRK-510"),
     (CryptoTradingAgent, "BRK-520"),

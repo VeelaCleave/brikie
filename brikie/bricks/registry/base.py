@@ -1,7 +1,7 @@
-"""BrickManifest dataclass for the Kadeia Registry.
+"""BrickManifest dataclass for the brikie.co registry.
 
 Defines the serialisable manifest format that describes every brick
-published to the Kadeia registry — name, version, type, dependencies,
+published to the brikie.co registry — name, version, type, dependencies,
 tool schemas, and config schema.
 """
 
@@ -13,7 +13,7 @@ from typing import Any
 
 @dataclass
 class BrickManifest:
-    """Serialisable manifest describing a brick in the Kadeia registry.
+    """Serialisable manifest describing a brick in the brikie.co registry.
 
     Attributes:
         name: Canonical brick name (e.g. "foreman").

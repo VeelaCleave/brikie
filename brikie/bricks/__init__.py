@@ -10,7 +10,7 @@ Submodules (each is independently importable):
     interface   — Human/system communication (CLI, Web UI).
     tool        — Agent actions on the environment.
     soul        — Persona manifests for agent identity.
-    registry    — Remote brick registry (Kadeia) client and installer.
+    registry    — Remote brick registry (brikie.co) client and installer.
     memory      — Memory subsystems (LCM, MemPalace, LLM Wiki).
     logging     — Diagnostics, token accounting, and call tracing.
     improvement — Self-healing middleware for auto-fixing tool calls.

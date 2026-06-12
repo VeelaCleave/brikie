@@ -49,7 +49,7 @@ BRICK_NUMBERS: Dict[str, str] = {
     "DummyToolBrick": "BRK-400",
     "ShellToolBrick": "BRK-410",
     "CloakBrowserBrick": "BRK-420",
-    "KadeiaInstallerBrick": "BRK-450",
+    "RegistryInstallerBrick": "BRK-450",
 
     # ── Soul Bricks (500-599) ─────────────────────────────────────────
     "Foreman": "BRK-500",

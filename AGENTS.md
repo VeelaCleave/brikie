@@ -24,8 +24,9 @@ disagree, this file wins.
 |-------|-------|--------|
 | A | Working transcript-style CLI, agent loop, soul prompt injection | ✅ done |
 | B | Kernel purity, souls-as-config, build sets, installer prototype | ✅ done |
-| C | Real LLM-driven Dreamer ⇄ Foreman AFK negotiation, Mason executor sub-agents, soul prompt wiring | next |
-| D | brikie.co registry (rename kadeia bricks), real dynamic brick install, agent-authored bricks | after C |
+| C | Real LLM-driven Dreamer ⇄ Foreman AFK negotiation, Mason executor sub-agents, soul prompt wiring | ✅ done |
+| D | brikie.co registry (kadeia renamed), real dynamic brick install (download + checksum + seat), agent-authored bricks (`registry_create_brick`), uninstall | ✅ done |
+| E | brikie.co server side: publish endpoint, real registry index, website installer generation | next |
 
 ## Architecture — the rules that are not negotiable
 
