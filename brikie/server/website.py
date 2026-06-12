@@ -1,9 +1,13 @@
-"""Ninite-style installer generation for brikie.co.
+"""Ninite-style installer generation + the brikie.co landing page.
 
 Turns a brick selection into a Build Set JSON and a shell installer, and
-renders the brick-picker web page. The brick catalog is imported from
+renders the landing page (hero with falling-brick animation, brick
+picker, community registry listing). The brick catalog is imported from
 ``brikie.install`` — that module is the local reference implementation of
 the same flow, so the two can never drift apart.
+
+The page template uses ``%%TOKEN%%`` placeholders instead of f-strings so
+the CSS/JS braces stay readable.
 """
 
 from __future__ import annotations
@@ -137,18 +141,24 @@ echo "run your agent with:  brikie --set {name}"
 """
 
 
+# ──────────────────────────────────────────────────────────────────────
+# Landing page
+# ──────────────────────────────────────────────────────────────────────
+
+
 def render_index_html(registry_manifests: list[dict[str, Any]]) -> str:
-    """Render the brikie.co brick-picker page.
+    """Render the brikie.co landing page.
 
     Args:
         registry_manifests: Latest manifests of all published community
-            bricks, shown below the built-in catalog.
+            bricks, shown in the community section.
     """
     groups: list[str] = []
     for group, entries in CATALOG.items():
         rows = "\n".join(
             f'<label class="brick"><input type="checkbox" name="brick" '
             f'value="{html.escape(e.brk)}"{" checked" if e.default else ""}>'
+            f'<span class="check"></span>'
             f'<span class="brk">{html.escape(e.brk)}</span>'
             f'<span class="label">{html.escape(e.label)}</span>'
             f'<span class="blurb">{html.escape(e.blurb)}</span></label>'
@@ -167,61 +177,261 @@ def render_index_html(registry_manifests: list[dict[str, Any]]) -> str:
             for m in registry_manifests
         )
         community = (
-            "<h2>community bricks in this registry</h2>"
-            "<p class='hint'>install at runtime with the registry_install tool</p>"
+            "<p class='hint'>published by agents, installable at runtime "
+            "with <code>registry_install</code></p>"
             f"<ul class='community'>{rows}</ul>"
         )
     else:
         community = (
-            "<h2>community bricks in this registry</h2>"
-            "<p class='hint'>none published yet — be the first: "
-            "<code>registry_publish</code></p>"
+            "<p class='hint'>none published yet — be the first: author a "
+            "brick at runtime and <code>registry_publish</code> it</p>"
         )
 
-    return f"""<!doctype html>
+    page = _PAGE_TEMPLATE
+    page = page.replace("%%GROUPS%%", "".join(groups))
+    page = page.replace("%%COMMUNITY%%", community)
+    page = page.replace("%%REPO%%", REPO_URL)
+    return page
+
+
+_PAGE_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>brikie.co — build your agent, brick by brick</title>
+<title>brikie — build your agent, brick by brick</title>
+<meta name="description" content="brikie is a modular agent harness where every capability is an optional, hot-swappable brick. Pick your bricks, get a one-line installer.">
 <style>
-  body {{ background:#16100b; color:#e8d5c4; font-family:ui-monospace,monospace;
-         max-width:880px; margin:2rem auto; padding:0 1rem; }}
-  h1 {{ color:{ACCENT}; }} h2 {{ color:{ACCENT_SOFT}; margin-top:2rem; }}
-  .tagline {{ color:#c8855a; font-style:italic; }}
-  fieldset {{ border:1px solid {BORDER}; margin:1rem 0; padding:.6rem 1rem; }}
-  legend {{ color:{ACCENT_SOFT}; font-weight:bold; padding:0 .5rem; }}
-  .brick {{ display:block; padding:.25rem 0; cursor:pointer; }}
-  .brk {{ color:{ACCENT}; margin:0 .6rem; }}
-  .label {{ font-weight:bold; margin-right:.6rem; }}
-  .blurb {{ color:#9c7a5f; }}
-  .hint {{ color:#9c7a5f; }}
-  input[type=text] {{ background:#241a12; color:#e8d5c4;
-         border:1px solid {BORDER}; padding:.4rem; }}
-  pre {{ background:#241a12; border:1px solid {BORDER}; padding:1rem;
-         overflow-x:auto; white-space:pre-wrap; word-break:break-all; }}
-  a {{ color:{ACCENT_SOFT}; }}
-  ul.community {{ list-style:none; padding-left:0; }}
+:root {
+  --bg: #16100b;
+  --panel: #1f150d;
+  --panel2: #241a12;
+  --accent: #ff762e;
+  --soft: #ff9e4f;
+  --border: #7a3a1d;
+  --muted: #9c7a5f;
+  --text: #e8d5c4;
+  --c: 18px;  /* tetromino cell size */
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font-family: ui-monospace, "Cascadia Code", "JetBrains Mono", Menlo, monospace;
+}
+a { color: var(--soft); }
+code { color: var(--soft); }
+
+/* ── hero ─────────────────────────────────────────────────────────── */
+.hero {
+  position: relative; min-height: 78vh; overflow: hidden;
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; text-align: center; padding: 4rem 1rem 6rem;
+  background-image:
+    linear-gradient(rgba(255,118,46,.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,118,46,.05) 1px, transparent 1px);
+  background-size: var(--c) var(--c);
+}
+.hero::after {  /* the settled brick wall at the bottom */
+  content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 56px;
+  background:
+    repeating-linear-gradient(90deg,
+      transparent 0, transparent 54px, var(--bg) 54px, var(--bg) 58px),
+    repeating-linear-gradient(0deg,
+      transparent 0, transparent 24px, var(--bg) 24px, var(--bg) 28px),
+    linear-gradient(180deg, #b8431c, #8a3415);
+  box-shadow: 0 -6px 24px rgba(255, 118, 46, .25);
+}
+
+/* falling tetrominoes — one div per piece, cells drawn with box-shadow */
+.piece {
+  position: absolute; top: calc(-5 * var(--c));
+  width: var(--c); height: var(--c);
+  opacity: .55; pointer-events: none;
+  animation: fall var(--dur) linear infinite;
+  animation-delay: var(--delay);
+}
+@keyframes fall {
+  0%   { transform: translateY(0) rotate(0deg); }
+  100% { transform: translateY(115vh) rotate(360deg); }
+}
+/* I */ .p-i { background: #ff762e; box-shadow: 0 var(--c) #ff762e, 0 calc(2*var(--c)) #ff762e, 0 calc(3*var(--c)) #ff762e; }
+/* O */ .p-o { background: #ff9e4f; box-shadow: var(--c) 0 #ff9e4f, 0 var(--c) #ff9e4f, var(--c) var(--c) #ff9e4f; }
+/* T */ .p-t { background: #d4561a; box-shadow: var(--c) 0 #d4561a, calc(2*var(--c)) 0 #d4561a, var(--c) var(--c) #d4561a; }
+/* L */ .p-l { background: #ffb36b; box-shadow: 0 var(--c) #ffb36b, 0 calc(2*var(--c)) #ffb36b, var(--c) calc(2*var(--c)) #ffb36b; }
+/* S */ .p-s { background: #b8431c; box-shadow: calc(-1*var(--c)) var(--c) #b8431c, 0 var(--c) #b8431c, var(--c) 0 #b8431c; }
+/* Z */ .p-z { background: #e8742f; box-shadow: var(--c) 0 #e8742f, var(--c) var(--c) #e8742f, calc(2*var(--c)) var(--c) #e8742f; }
+/* J */ .p-j { background: #c96a2e; box-shadow: 0 var(--c) #c96a2e, 0 calc(2*var(--c)) #c96a2e, calc(-1*var(--c)) calc(2*var(--c)) #c96a2e; }
+
+/* wordmark: letter tiles drop in like landing pieces */
+.logo { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; z-index: 2; }
+.logo span {
+  display: grid; place-items: center;
+  width: 64px; height: 64px; font-size: 2.4rem; font-weight: bold;
+  color: #16100b; background: linear-gradient(180deg, var(--soft), var(--accent));
+  border: 2px solid #ffc89a; border-bottom-color: #8a3415;
+  border-right-color: #8a3415; border-radius: 4px;
+  animation: drop .9s cubic-bezier(.22, 1.6, .36, 1) both;
+  animation-delay: var(--d);
+  box-shadow: 0 6px 18px rgba(255, 118, 46, .35);
+}
+@keyframes drop {
+  0%   { transform: translateY(-60vh); opacity: 0; }
+  60%  { opacity: 1; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+.tagline {
+  z-index: 2; margin-top: 1.4rem; color: var(--muted); font-style: italic;
+  font-size: 1.15rem; animation: fadein 1s ease 1s both;
+}
+.ctas { z-index: 2; margin-top: 2.2rem; display: flex; gap: 1rem; flex-wrap: wrap;
+        justify-content: center; animation: fadein 1s ease 1.3s both; }
+.btn {
+  display: inline-block; padding: .8rem 1.6rem; border-radius: 4px;
+  text-decoration: none; font-weight: bold; border: 1px solid var(--border);
+}
+.btn-primary { background: var(--accent); color: #16100b; border-color: var(--soft); }
+.btn-primary:hover { background: var(--soft); }
+.btn-ghost { color: var(--soft); }
+.btn-ghost:hover { background: var(--panel2); }
+@keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
+
+/* ── sections ─────────────────────────────────────────────────────── */
+main { max-width: 920px; margin: 0 auto; padding: 0 1rem 4rem; }
+h2 { color: var(--soft); margin-top: 3.5rem; font-size: 1.5rem; }
+.steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+         gap: 1rem; margin-top: 1.5rem; }
+.step {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+  padding: 1.2rem 1.4rem;
+}
+.step .num {
+  display: inline-grid; place-items: center; width: 34px; height: 34px;
+  background: var(--accent); color: #16100b; font-weight: bold;
+  border-radius: 4px; margin-bottom: .8rem;
+}
+.step h3 { margin: 0 0 .5rem; color: var(--text); font-size: 1.05rem; }
+.step p { margin: 0; color: var(--muted); font-size: .92rem; line-height: 1.5; }
+
+/* ── picker ───────────────────────────────────────────────────────── */
+fieldset {
+  border: 1px solid var(--border); border-radius: 6px;
+  margin: 1.2rem 0; padding: .8rem 1.2rem; background: var(--panel);
+}
+legend { color: var(--soft); font-weight: bold; padding: 0 .6rem; }
+.brick {
+  display: grid; grid-template-columns: 22px 86px auto 1fr;
+  gap: .6rem; align-items: baseline;
+  padding: .45rem .5rem; cursor: pointer; border-radius: 4px;
+}
+.brick:hover { background: var(--panel2); }
+.brick input { display: none; }
+.check {
+  width: 16px; height: 16px; align-self: center;
+  border: 2px solid var(--border); border-radius: 3px; background: var(--bg);
+  transition: background .15s, border-color .15s;
+}
+.brick input:checked + .check { background: var(--accent); border-color: var(--soft); }
+.brk { color: var(--accent); font-size: .85rem; }
+.label { font-weight: bold; }
+.blurb { color: var(--muted); font-size: .88rem; }
+.hint { color: var(--muted); }
+input[type=text] {
+  background: var(--panel2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 4px; padding: .55rem .8rem;
+  font-family: inherit; font-size: 1rem;
+}
+.cmdbar { display: flex; gap: .6rem; align-items: stretch; margin-top: 1rem; }
+pre#cmd {
+  flex: 1; margin: 0; background: var(--panel2); border: 1px solid var(--border);
+  border-radius: 4px; padding: 1rem; overflow-x: auto;
+  white-space: pre-wrap; word-break: break-all;
+}
+#copy {
+  background: var(--panel); color: var(--soft); border: 1px solid var(--border);
+  border-radius: 4px; padding: 0 1.2rem; cursor: pointer; font-family: inherit;
+}
+#copy:hover { background: var(--panel2); }
+ul.community { list-style: none; padding-left: 0; }
+ul.community li { padding: .35rem 0; }
+footer {
+  border-top: 1px solid var(--border); margin-top: 4rem; padding: 2rem 1rem;
+  text-align: center; color: var(--muted);
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; }
+}
 </style>
 </head>
 <body>
-<h1>▀▄▀▄▀▄ brikie ▄▀▄▀▄▀</h1>
-<p class="tagline">build your agent &middot; brick by brick</p>
 
-<form id="picker">
-{''.join(groups)}
+<header class="hero">
+  <div class="piece p-i" style="left:6%;  --dur:11s; --delay:0s;"></div>
+  <div class="piece p-o" style="left:16%; --dur:14s; --delay:-6s;"></div>
+  <div class="piece p-t" style="left:27%; --dur:10s; --delay:-3s;"></div>
+  <div class="piece p-s" style="left:38%; --dur:15s; --delay:-9s;"></div>
+  <div class="piece p-l" style="left:58%; --dur:12s; --delay:-5s;"></div>
+  <div class="piece p-z" style="left:70%; --dur:13s; --delay:-1s;"></div>
+  <div class="piece p-j" style="left:81%; --dur:11s; --delay:-7s;"></div>
+  <div class="piece p-o" style="left:91%; --dur:16s; --delay:-11s;"></div>
+  <div class="piece p-t" style="left:48%; --dur:17s; --delay:-13s;"></div>
+
+  <div class="logo" aria-label="brikie">
+    <span style="--d:.05s">b</span><span style="--d:.18s">r</span><span style="--d:.31s">i</span><span style="--d:.44s">k</span><span style="--d:.57s">i</span><span style="--d:.70s">e</span>
+  </div>
+  <p class="tagline">build your agent &middot; brick by brick</p>
+  <div class="ctas">
+    <a class="btn btn-primary" href="#picker">build your installer ↓</a>
+    <a class="btn btn-ghost" href="%%REPO%%">GitHub →</a>
+  </div>
+</header>
+
+<main>
+<h2>how it works</h2>
+<div class="steps">
+  <div class="step"><span class="num">1</span>
+    <h3>pick your bricks</h3>
+    <p>Every capability is an optional, hot-swappable brick. The only rule:
+       at least one interface and one provider. Memory, tools, security,
+       souls — all yours to choose.</p>
+  </div>
+  <div class="step"><span class="num">2</span>
+    <h3>run one line</h3>
+    <p>Your selection becomes a custom installer. <code>curl | sh</code>
+       writes a Build Set — the exact JSON contract your agent boots from.</p>
+  </div>
+  <div class="step"><span class="num">3</span>
+    <h3>boot &amp; grow</h3>
+    <p>Your agent can search this registry, install bricks at runtime,
+       author brand-new ones from source, and publish them back for
+       everyone else.</p>
+  </div>
+</div>
+
+<h2 id="picker">build your installer</h2>
+<form id="pickerform">
+%%GROUPS%%
 <p><label>build set name:
   <input type="text" id="setname" value="custom" size="20"></label></p>
 </form>
 
-<h2>your installer</h2>
-<pre id="cmd"></pre>
+<div class="cmdbar">
+  <pre id="cmd"></pre>
+  <button id="copy" type="button">copy</button>
+</div>
 <p><a id="buildset-link" href="#">inspect the generated buildset.json</a></p>
 
-{community}
+<h2>community bricks in this registry</h2>
+%%COMMUNITY%%
+</main>
+
+<footer>
+  <p>brikie — a modular agent harness. <a href="%%REPO%%">source on GitHub</a></p>
+  <p>The crown isn't stolen — it's built. 🧱👑</p>
+</footer>
 
 <script>
-function update() {{
+function update() {
   const picked = [...document.querySelectorAll('input[name=brick]:checked')]
     .map(b => b.value);
   const name = document.getElementById('setname').value || 'custom';
@@ -230,9 +440,17 @@ function update() {{
   document.getElementById('cmd').textContent =
     'curl -fsSL "' + base + '/install.sh?' + qs + '" | sh';
   document.getElementById('buildset-link').href = '/buildset.json?' + qs;
-}}
-document.getElementById('picker').addEventListener('change', update);
+}
+document.getElementById('pickerform').addEventListener('change', update);
 document.getElementById('setname').addEventListener('input', update);
+document.getElementById('copy').addEventListener('click', () => {
+  navigator.clipboard.writeText(document.getElementById('cmd').textContent)
+    .then(() => {
+      const btn = document.getElementById('copy');
+      btn.textContent = 'copied!';
+      setTimeout(() => { btn.textContent = 'copy'; }, 1500);
+    });
+});
 update();
 </script>
 </body>
