@@ -24,7 +24,6 @@ class MempalaceConnectionPool(VersionedConnectionPool):
     SCHEMA_VERSION = 1
     MIGRATIONS = {}
     DB_FILENAME = "mempalace.db"
-
     def __init__(self, db_path: str) -> None:
         super().__init__(db_path)
 
@@ -475,3 +474,26 @@ class MempalaceStore:
         return (await self._pool._execute(
             "SELECT COUNT(*) FROM triples", (), fetch="value"
         )) or 0
+
+    async def get_recent_entities(self, limit: int = 10) -> list[dict]:
+        """Get the most recently created entities."""
+        rows = await self._pool._execute(
+            "SELECT id, name, entity_type, session_id, description, created_at, valid_from, valid_to "
+            "FROM entities ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+            fetch="all",
+        )
+        result = []
+        if rows:
+            for row in rows:
+                result.append({
+                    "id": row[0],
+                    "name": row[1],
+                    "entity_type": row[2],
+                    "session_id": row[3],
+                    "description": row[4],
+                    "created_at": row[5],
+                    "valid_from": row[6],
+                    "valid_to": row[7],
+                })
+        return result

@@ -52,6 +52,24 @@ _HELP_TEXT = """\
 """
 
 
+def _unwrap_hook_data(data: Any) -> Any:
+    """Unwrap hook data that may be wrapped in a HookEvent envelope.
+
+    The HookDispatcher passes the raw data argument to callbacks. When the
+    event_loop dispatches a HookEvent, the callback receives the HookEvent
+    object directly — not the inner payload. This helper peels the envelope.
+
+    Args:
+        data: Either a raw dict/list or a HookEvent wrapping the inner payload.
+
+    Returns:
+        The inner payload (dict, list, or whatever was in data.data).
+    """
+    if isinstance(data, HookEvent):
+        return data.data
+    return data
+
+
 class EventLoop:
     """Core event loop driving the Baseplate lifecycle."""
 
@@ -166,11 +184,33 @@ class EventLoop:
         return await brick.build_context(session_id)
 
     async def _memory_post_llm(self, brick: Any, data: Any) -> None:
+        """Intercept POST_LLM hook to persist assistant messages into memory bricks.
+
+        The dispatcher wraps hook data in a HookEvent — unwrap it to get
+        the inner payload dict.
+        """
         session_id = await self._state.get("session_id", "default")
-        if isinstance(data, dict):
-            content = data.get("content", "")
-            await brick.intercept_message(session_id, "assistant", content)
+        payload = _unwrap_hook_data(data)
+        if isinstance(payload, dict):
+            content = payload.get("content", "")
+            if content:
+                await brick.intercept_message(session_id, "assistant", content)
         return None
+
+    async def _intercept_user_message(self, user_text: str) -> None:
+        """Persist user messages into all memory-capable bricks.
+
+        Called at the start of _turn() before the agent loop begins.
+        Only intercepts non-command, non-empty text.
+        """
+        if not user_text or user_text.strip().startswith("/"):
+            return
+        session_id = await self._state.get("session_id", "default")
+        for brick in self._memory_capable_bricks():
+            try:
+                await brick.intercept_message(session_id, "user", user_text)
+            except Exception:
+                logger.exception("Failed to intercept user message in brick: %s", brick.name)
 
     async def _register_brick_hooks(self) -> None:
         """Discover and register middleware hooks from any capable brick.
@@ -219,6 +259,10 @@ class EventLoop:
             data=user_msg,
             brick_name="event_loop",
         ))
+
+        # Intercept user message into memory bricks before LLM sees it
+        await self._intercept_user_message(user_text)
+
         await self._hooks.dispatch(HookType.PRE_LLM, HookEvent(
             hook_type=HookType.PRE_LLM,
             data=self._message_history,
@@ -558,7 +602,21 @@ class EventLoop:
         return messages
 
     async def _build_memory_blob(self) -> str:
-        """Collect compressed context from memory-capable bricks, if any."""
+        """Collect compressed context from memory-capable bricks, if any.
+
+        Each brick returns its own context shape. This method normalizes
+        across the three memory brick types:
+
+        - LCM (lossless context manager):
+            {"summaries": [...], "tail": [...]}
+        - MemPalace (knowledge graph):
+            {"mempalace": {entity_count, triple_count, ...}}
+        - Wiki (page store):
+            {"wiki": {page_count, recent_pages, ...}}
+
+        Each brick type gets its own section header so the LLM can
+        distinguish session memory from persistent knowledge.
+        """
         memory_bricks = self._memory_capable_bricks()
         if not memory_bricks:
             return ""
@@ -569,20 +627,59 @@ class EventLoop:
             ctx = await brick.build_context(session_id)
             if not ctx:
                 continue
+
+            brick_name = getattr(brick, "name", "memory")
+
+            # LCM shape — DAG summaries + recent tail
             summaries = ctx.get("summaries", [])
             tail = ctx.get("tail", [])
             if summaries:
-                context_parts.append("## Session Summary")
+                context_parts.append(f"## Session Summary ({brick_name})")
                 for s in summaries:
                     context_parts.append(
                         f"[DAG depth={s.get('depth', 0)}] {s.get('content', '')}"
                     )
             if tail:
-                context_parts.append("## Recent Messages")
+                context_parts.append(f"## Recent Messages ({brick_name})")
                 for t in tail:
                     context_parts.append(
                         f"[{t.get('role', '?')}] {t.get('content', '')[:200]}"
                     )
+
+            # MemPalace shape — knowledge graph stats
+            mempalace_ctx = ctx.get("mempalace")
+            if mempalace_ctx:
+                parts = [f"## Knowledge Graph ({brick_name})"]
+                ec = mempalace_ctx.get("entity_count", 0)
+                tc = mempalace_ctx.get("triple_count", 0)
+                parts.append(f"- {ec} entities, {tc} relationships")
+                # Include a few recent entities as context clues
+                entities = mempalace_ctx.get("recent_entities", [])
+                for ent in entities[:5]:
+                    name = ent.get("name", "?")
+                    etype = ent.get("entity_type", "?")
+                    desc = ent.get("description", "")
+                    if desc:
+                        parts.append(f"  - {name} ({etype}): {desc[:120]}")
+                    else:
+                        parts.append(f"  - {name} ({etype})")
+                context_parts.append("\n".join(parts))
+
+            # Wiki shape — page store stats
+            wiki_ctx = ctx.get("wiki")
+            if wiki_ctx:
+                parts = [f"## Wiki Knowledge Base ({brick_name})"]
+                pc = wiki_ctx.get("page_count", 0)
+                parts.append(f"- {pc} pages")
+                recent = wiki_ctx.get("recent_pages", [])
+                if recent:
+                    parts.append("- Recent pages:")
+                    for p in recent[:5]:
+                        title = p.get("title", "?")
+                        status = p.get("status", "?")
+                        parts.append(f"  - {title} [{status}]")
+                context_parts.append("\n".join(parts))
+
         return "\n\n".join(context_parts)
 
     # ------------------------------------------------------------------

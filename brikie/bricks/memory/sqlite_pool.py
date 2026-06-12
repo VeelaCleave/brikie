@@ -21,6 +21,10 @@ class MigrationError(Exception):
     """Raised when a schema migration fails."""
 
 
+class SchemaIsolationError(Exception):
+    """Raised when a pool's schema is applied to the wrong database file."""
+
+
 class VersionedConnectionPool:
     """SQLite connection pool with schema version tracking.
 
@@ -36,9 +40,20 @@ class VersionedConnectionPool:
             }
     """
 
+    # Registry of all known pool DB filenames, populated by subclasses.
+    # Used by the schema isolation guard to prevent cross-contamination.
+    _KNOWN_DB_FILENAMES: dict[str, str] = {}  # filename -> pool class name
+
     SCHEMA_VERSION: int = 1
     MIGRATIONS: Dict[int, MigrationFn] = {}
     DB_FILENAME: str = "store.db"
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Auto-register each subclass's DB_FILENAME in the class-level registry."""
+        super().__init_subclass__(**kwargs)
+        fn = cls.DB_FILENAME
+        if fn != "store.db" and fn not in cls._KNOWN_DB_FILENAMES:
+            cls._KNOWN_DB_FILENAMES[fn] = f"{cls.__module__}.{cls.__qualname__}"
 
     def __init__(self, db_path: str) -> None:
         self._db_path = db_path
@@ -51,6 +66,19 @@ class VersionedConnectionPool:
 
     async def initialize(self) -> None:
         """Create the database, apply schema, and run pending migrations."""
+        # Schema isolation guard: refuse to write this pool's schema into a
+        # database file that belongs to a different pool.
+        # This catches bugs like LcmStore("mempalace.db") which would write
+        # dag_nodes into the MemPalace database.
+        db_filename = Path(self._db_path).name
+        for known_fn, known_pool in self._KNOWN_DB_FILENAMES.items():
+            if db_filename == known_fn and known_fn != self.DB_FILENAME:
+                raise SchemaIsolationError(
+                    f"Refusing to write {type(self).__name__} schema into "
+                    f"'{db_filename}' (owned by {known_pool}). "
+                    f"This would corrupt the database."
+                )
+
         schema_path = self._get_schema_path()
         conn = None
         try:

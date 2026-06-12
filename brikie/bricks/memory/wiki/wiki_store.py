@@ -26,7 +26,6 @@ class WikiConnectionPool(VersionedConnectionPool):
     SCHEMA_VERSION = 1
     MIGRATIONS = {}
     DB_FILENAME = "wiki.db"
-
     def __init__(self, db_path: str) -> None:
         super().__init__(db_path)
 

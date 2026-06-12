@@ -114,15 +114,18 @@ class MempalaceBrick(MemoryBrick, ToolBrick):
     async def build_context(self, session_id: str) -> Dict[str, Any]:
         """Build context from MemPalace knowledge graph.
 
-        Returns a summary of the current state of the knowledge graph.
+        Returns a summary of the current state of the knowledge graph
+        including recent entities for context injection.
         """
         entity_count = await self._store.get_entity_count()
         triple_count = await self._store.get_triple_count()
+        recent_entities = await self._store.get_recent_entities(limit=10)
 
         return {
             "mempalace": {
                 "entity_count": entity_count,
                 "triple_count": triple_count,
+                "recent_entities": recent_entities,
                 "session_id": session_id,
             },
         }

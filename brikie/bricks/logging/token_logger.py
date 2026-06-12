@@ -166,12 +166,15 @@ class TokenLoggerBrick(LoggingBrick):
         """Extract token metadata from a POST_LLM payload and emit a log entry.
 
         Args:
-            data: The POST_LLM hook data — either a dict with _meta or raw.
+            data: The POST_LLM hook data — either a dict with _meta or a
+                  HookEvent wrapping one. The event_loop dispatches POST_LLM
+                  with a HookEvent envelope, so we unwrap it here.
         """
-        if not isinstance(data, dict):
+        payload = data.data if hasattr(data, "data") else data
+        if not isinstance(payload, dict):
             return
 
-        meta = data.get("_meta", {}) or {}
+        meta = payload.get("_meta", {}) or {}
         model = meta.get("model", "unknown")
         input_tokens = meta.get("input_tokens", 0)
         output_tokens = meta.get("output_tokens", 0)
@@ -180,7 +183,7 @@ class TokenLoggerBrick(LoggingBrick):
         trace_id = meta.get("trace_id", "")
 
         # Fallback: count tool calls from the raw response
-        tool_calls = data.get("tool_calls", [])
+        tool_calls = payload.get("tool_calls", [])
         tool_call_count = len(tool_calls) if isinstance(tool_calls, list) else 0
 
         cost_input = (input_tokens / 1000) * self._cost_per_1k_input

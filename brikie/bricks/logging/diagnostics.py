@@ -164,17 +164,21 @@ class DiagnosticsCollectorBrick(LoggingBrick):
             )
 
         async def on_pre_llm(data: Any) -> None:
+            # HookEvent unwrap: data may be HookEvent(data=[...]) from dispatcher
+            inner = data.data if hasattr(data, "data") else data
             self.emit(
                 LogEntry(
                     source=self._name,
                     event_type="pre_llm",
                     level=LogLevel.DEBUG,
-                    payload={"message_count": self._count_messages(data)},
+                    payload={"message_count": self._count_messages(inner)},
                 )
             )
 
         async def on_post_llm(data: Any) -> None:
-            content = data.get("content", "") if isinstance(data, dict) else ""
+            # HookEvent unwrap: data may be HookEvent(data={...}) from dispatcher
+            payload = data.data if hasattr(data, "data") else data
+            content = payload.get("content", "") if isinstance(payload, dict) else ""
             self.emit(
                 LogEntry(
                     source=self._name,
@@ -183,14 +187,16 @@ class DiagnosticsCollectorBrick(LoggingBrick):
                     payload={
                         "response_length": len(content),
                         "has_tool_calls": bool(
-                            data.get("tool_calls") if isinstance(data, dict) else False
+                            payload.get("tool_calls") if isinstance(payload, dict) else False
                         ),
                     },
                 )
             )
 
         async def on_pre_tool(data: Any) -> None:
-            tool_names = self._extract_tool_names(data)
+            # HookEvent unwrap
+            inner = data.data if hasattr(data, "data") else data
+            tool_names = self._extract_tool_names(inner)
             self.emit(
                 LogEntry(
                     source=self._name,
@@ -201,7 +207,9 @@ class DiagnosticsCollectorBrick(LoggingBrick):
             )
 
         async def on_post_tool(data: Any) -> None:
-            tool_results = self._extract_tool_results(data)
+            # HookEvent unwrap
+            inner = data.data if hasattr(data, "data") else data
+            tool_results = self._extract_tool_results(inner)
             self.emit(
                 LogEntry(
                     source=self._name,
