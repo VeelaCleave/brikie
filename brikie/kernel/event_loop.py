@@ -366,6 +366,10 @@ class EventLoop:
 
             if not raw_calls:
                 if not content:
+                    if meta.get("provider_failed"):
+                        # The human-readable error was already rendered —
+                        # a placeholder reply on top would just be noise.
+                        return
                     content = "[the model returned an empty response]"
                 self._message_history.append(Message(role="assistant", content=content))
                 await self._emit_assistant(content)
@@ -840,7 +844,11 @@ class EventLoop:
             return content, raw_calls, {}
 
         if errors:
-            await self._emit_error("All providers failed:\n" + "\n".join(errors))
+            if len(errors) == 1:
+                await self._emit_error(errors[0])
+            else:
+                await self._emit_error("All providers failed:\n" + "\n".join(errors))
+            return "", [], {"provider_failed": True}
         return "", [], {}
 
     def _track_usage(self, meta: Dict[str, Any]) -> None:

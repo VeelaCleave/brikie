@@ -19,16 +19,18 @@ curl -fsSL "https://brikie.co/install.sh?bricks=BRK-300,BRK-200,BRK-410,BRK-420&
 brikie --set custom
 ```
 
-Or from a checkout:
+Or just:
 
 ```sh
-pip install -e .
-python3 -m brikie.install      # interactive brick picker
-brikie --set default
+pip install brikie
+brikie
 ```
 
-The default set expects an OpenAI-compatible endpoint (any local vLLM /
-llama.cpp / hosted API) — the provider is just config, never hardcoded.
+First run on a terminal opens a 60-second setup: brikie detects running
+local servers (Ollama, LM Studio, vLLM) and API keys already in your
+environment, and one keystroke later you're chatting. Rerun it any time
+with `brikie --onboard`, or compose a full custom stack with
+`python3 -m brikie.install`.
 
 ## What makes it different
 

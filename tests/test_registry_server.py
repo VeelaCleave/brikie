@@ -125,8 +125,27 @@ class TestBuildSetGeneration:
         assert build["name"] == "mini"
         brks = [b["brk"] for b in build["bricks"]]
         assert brks == ["BRK-300", "BRK-200"]
+        # bare BRK-200 resolves to the default provider preset (ollama)
         provider = build["bricks"][1]
-        assert provider["config"]["base_url"] == "http://localhost:8000/v1"
+        assert provider["config"]["base_url"] == "http://localhost:11434/v1"
+        assert provider["config"]["api_key"] == "not-needed"
+
+    def test_provider_preset_selection(self):
+        build = generate_buildset(["BRK-300", "BRK-200@anthropic"], "mini")
+        provider = build["bricks"][1]
+        assert provider["brk"] == "BRK-200"
+        assert provider["config"]["base_url"] == "https://api.anthropic.com"
+        assert provider["config"]["api_format"] == "claude"
+        # keys are env references, never literals
+        assert provider["config"]["api_key"] == "env:ANTHROPIC_API_KEY"
+
+    def test_two_provider_presets_first_wins(self):
+        build = generate_buildset(
+            ["BRK-300", "BRK-200@groq", "BRK-200@openai"], "mini"
+        )
+        providers = [b for b in build["bricks"] if b["brk"] == "BRK-200"]
+        assert len(providers) == 1
+        assert "groq" in providers[0]["config"]["base_url"]
 
     def test_missing_provider_rejected(self):
         with pytest.raises(GenerationError, match="Provider"):

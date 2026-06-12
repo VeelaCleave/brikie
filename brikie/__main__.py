@@ -53,12 +53,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Override the provider base URL from the Build Set",
     )
+    parser.add_argument(
+        "--onboard",
+        action="store_true",
+        help="Rerun the first-run provider setup wizard",
+    )
     return parser.parse_args(argv)
 
 
 async def main() -> None:
     """Bootstrap the Baseplate kernel and run the event loop."""
     args = parse_args()
+
+    # First run on a real terminal? Sort the provider out before booting.
+    from brikie.onboard import maybe_onboard
+    maybe_onboard(args, _BUILD_SETS_DIR)
 
     registry = BrickRegistry()
     state = StateManager()

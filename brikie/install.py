@@ -22,6 +22,8 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from brikie.config.provider_presets import PRESETS, preset_config
+
 SETS_DIR = Path(__file__).resolve().parent / "bricks" / "build" / "sets"
 
 ACCENT = "#ff762e"
@@ -36,6 +38,12 @@ class CatalogEntry:
     blurb: str
     default: bool = False
     config: Dict[str, Any] = field(default_factory=dict)
+    preset: str | None = None  # provider preset id (BRK-200 variants)
+
+    @property
+    def value(self) -> str:
+        """Unique picker value — BRK number, qualified by preset if any."""
+        return f"{self.brk}@{self.preset}" if self.preset else self.brk
 
 
 # The local brick catalog. brikie.co will serve this as JSON one day;
@@ -44,17 +52,14 @@ CATALOG: Dict[str, List[CatalogEntry]] = {
     "Interface Bricks (pick at least 1)": [
         CatalogEntry("BRK-300", "CLI", "Terminal interface with rich TUI rendering", default=True),
     ],
-    "Provider Bricks (pick at least 1)": [
+    "Provider Bricks (pick exactly 1)": [
         CatalogEntry(
-            "BRK-200", "HTTP Provider",
-            "OpenAI- or Claude-format API (local vLLM, OpenAI, Anthropic…)",
-            default=True,
-            config={
-                "model": "deepseek-v4-flash-spark",
-                "base_url": "http://localhost:8000/v1",
-                "api_key": "not-needed",
-            },
-        ),
+            "BRK-200", p.label, p.blurb,
+            default=(p.name == "ollama"),
+            config=preset_config(p),
+            preset=p.name,
+        )
+        for p in PRESETS.values()
     ],
     "Tool Bricks": [
         CatalogEntry("BRK-410", "File Tools", "bash, read/write file, glob, grep, LSP diagnostics", default=True),
@@ -87,8 +92,9 @@ CATALOG: Dict[str, List[CatalogEntry]] = {
 
 _REQUIRED_GROUPS = {
     "Interface Bricks (pick at least 1)",
-    "Provider Bricks (pick at least 1)",
+    "Provider Bricks (pick exactly 1)",
 }
+_SINGLE_PICK_GROUPS = {"Provider Bricks (pick exactly 1)"}
 
 
 def _print_banner(console: Console) -> None:
@@ -143,6 +149,9 @@ def _pick_group(console: Console, group: str, entries: List[CatalogEntry]) -> Li
         if required and not picked:
             console.print("  [red]This category needs at least one brick.[/]")
             continue
+        if group in _SINGLE_PICK_GROUPS and len(picked) > 1:
+            console.print(f"  [dim]keeping just the first: {picked[0].label}[/]")
+            picked = picked[:1]
         return picked
 
 
