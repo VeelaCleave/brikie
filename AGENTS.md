@@ -1,45 +1,133 @@
 # Brikie — AGENTS.md
 
+Read this before touching anything. It is the working contract for every
+developer and agent on this codebase.
+
 ## What is this project
 
-A modular agentic harness using a "Brick" architecture. Every component (LLM providers, memory, tools, interfaces, security, logging) is a hot-swappable module that plugs into a minimal Baseplate kernel. The Baseplate defines interfaces and lifecycle hooks; Bricks implement them. The system supports multi-head orchestration, autonomous AFK loops, and a tripartite memory architecture.
+Brikie is a modular agentic harness. **Every capability is an optional,
+hot-swappable Brick** seated on a minimal Baseplate kernel. A user installs
+brikie by picking bricks (at minimum: one Interface Brick + one Provider
+Brick) — the eventual brikie.co website generates custom installers from
+brick selections, Ninite-style. Out of the box, the default Brick Set is:
+CLI + local deepseek provider + file tools + CloakBrowser web browsing.
 
-**Single source of truth**: `design.md` is the architectural blueprint. Read it before making structural decisions. The development plan in `design.md` (Phases 1–5) is the execution roadmap — follow phase order, do not skip ahead.
+`design.md` is the **historical blueprint** — useful for intent and the
+memory/AFK architecture, but it predates the build: it still says
+"Sisyphus" and "kadeia.co" (both superseded, see Naming) and its 5-phase
+plan is complete history, not a roadmap. When this file and `design.md`
+disagree, this file wins.
 
-## Development Plan (from `design.md`)
-
-The project builds in 5 strict phases. Do not jump ahead — each phase depends on the previous.
+## Current roadmap
 
 | Phase | Scope | Status |
 |-------|-------|--------|
-| **Phase 1** | Baseplate kernel, CLI Interface Brick, Provider Brick, dummy tool, middleware hooks | Build first |
-| **Phase 2** | CloakBrowser Tool Brick (stealth web autonomy via Playwright) | After Phase 1 |
-| **Phase 3** | Tripartite memory: LCM (lossless context), MemPalace (spatial/temporal graph), LLM Wiki (persistent synthesis) | After Phase 2 |
-| **Phase 4** | Kadeia ecosystem integration, Soul/Identity Bricks | After Phase 3 |
-| **Phase 5** | Multi-head orchestration, Security/Logging/Improvement Bricks, infinite AFK loop | Final |
+| A | Working transcript-style CLI, agent loop, soul prompt injection | ✅ done |
+| B | Kernel purity, souls-as-config, build sets, installer prototype | ✅ done |
+| C | Real LLM-driven Dreamer ⇄ Foreman AFK negotiation, Mason executor sub-agents, soul prompt wiring | next |
+| D | brikie.co registry (rename kadeia bricks), real dynamic brick install, agent-authored bricks | after C |
 
-## Architecture Principles
+## Architecture — the rules that are not negotiable
 
-- **Baseplate is the kernel**: Minimal event loop, state manager, Brick registry, middleware hooks. Knows nothing about LLMs, memory, or identity.
-- **Bricks are modules**: Provider, Interface, Soul, Memory, Security, Context, Logging, Improvement, Tool. Each implements a defined ABC/interface.
-- **Do not confuse bricks**: Interface Bricks are strictly for human-to-system or external-system-to-system communication (CLI, Web UI). Tool Bricks are strictly for the agent to take action on the environment (executing bash, searching files).
-- **Middleware hook lifecycle**: pre-parse → pre-llm → post-llm → pre-tool → post-tool → post-tool-call. Bricks intercept at their hook stage.
-- **Memory is auto-extracted**: The LLM should never manually "save a memory." Memory Bricks intercept the event bus and extract automatically.
-- **Multi-head orchestration**: Multiple Soul Bricks can occupy the "Head" simultaneously, communicating over an internal event bus during AFK mode.
+1. **The kernel imports nothing from `brikie.bricks`.** `brikie/kernel/`
+   may import brick types under `if TYPE_CHECKING:` only. At runtime the
+   kernel discovers capabilities structurally: any registered brick with
+   `get_hook_callbacks()` gets its middleware hooks wired; anything with
+   `build_context()` + `intercept_message()` is treated as memory. If your
+   new brick category needs kernel support, add a duck-typed capability,
+   not an import.
+2. **Every brick is optional.** The only minimum is ≥1 Provider + ≥1
+   Interface (enforced by `BuildLoader.validate_minimum_stack()`). Never
+   write code that assumes a memory, logging, security, or tool brick
+   exists. Probe with `hasattr` and degrade gracefully.
+3. **No provider defaults in code.** No hardcoded model names, API URLs,
+   or keys anywhere except Build Set JSONs and explicit CLI flag
+   overrides. The user's brick choice decides the provider — full stop.
+4. **Souls are configuration, not runtime bricks.** The BRK-500 block is
+   dataclass persona manifests loaded into `BuildSet.souls`. They are
+   never registered with the BrickRegistry and have no `init()`.
+5. **Build Set JSON is the product contract.** `brikie/bricks/build/sets/`
+   is what `brikie/install.py` writes locally and what brikie.co will
+   generate server-side. Schema changes there are breaking changes —
+   treat them like a public API.
+6. **Expensive resources initialize lazily.** `init()` must be fast and
+   must not fail the boot for an optional capability (see CloakBrowser:
+   the browser launches on first tool use, not at warm-up).
 
-## Key Technical Decisions
+## Adding a brick — the checklist
 
-- **Language**: Python 3.11+. The Baseplate and all core Bricks must be written in strict, type-hinted Python using asyncio for the event loop.
-- **CloakBrowser**: Uses a patched Chromium binary for stealth web browsing (not just Playwright/Puppeteer plugins). Integration is via `AGENT_BROWSER_EXECUTABLE_PATH` env var.
-- **MemPalace**: Uses ChromaDB (spatial vectors) + SQLite (temporal graph). All SQLite ops must be wrapped in try/finally to prevent connection leaks.
-- **LLM Wiki**: Markdown directory treated as a codebase. Page caps: 400 lines soft, 800 hard. Directory shards at 150 pages.
+1. Implement the category ABC (`brikie/bricks/<category>/base.py`).
+2. Set a class-level `BRICK_NUMBER` in the right 100-block
+   (`brikie/config/brick_numbers.py` documents the blocks).
+3. Register it in **both** `BRICK_NUMBERS` (config) and `BRICK_INDEX`
+   (build loader), and update the pinned count in
+   `tests/test_brick_numbers.py::test_registry_count`.
+4. Add it to the installer catalog in `brikie/install.py` with a
+   one-line blurb.
+5. Tool bricks: expose OpenAI-format schemas via a `tools` class
+   attribute and dispatch in `execute(name, args)`. Tool failures return
+   structured error payloads — never let one tool call crash the loop.
+6. Write tests, then **verify it live** (see Definition of Done).
+
+## Interface & provider contracts
+
+- Providers return `(content, tool_calls, meta)`; `meta` carries
+  `reasoning`, `usage` ({prompt,completion}_tokens), `finish_reason`.
+  A plain `(content, tool_calls)` 2-tuple is also accepted.
+- The event loop renders through **one** path: it prefers an interface's
+  optional `render_*` methods (`render_assistant_response`,
+  `render_thinking`, `render_tool_calls`, `render_tool_result`,
+  `render_startup`, `render_info`, `render_error`, `set_busy`,
+  `update_usage`) and falls back to `output()`. Never call both for the
+  same content — double rendering was a real shipped bug.
+- The CLI is transcript-style (scrollback-friendly, pipe-safe). All model
+  thinking and every tool call/result must be visible to the user.
+  Interfaces must work non-interactively: piped stdin in, plain text out.
+
+## Naming
+
+- **Foreman** (BRK-500) — site-boss orchestrator. **Dreamer** (BRK-510) —
+  proposal generator. **Mason** — Phase C executor sub-agents. The name
+  *Sisyphus* is retired; do not reintroduce it outside `design.md`.
+- The central registry is **brikie.co** (the `kadeia_*` brick names are
+  legacy pending the Phase D rename).
+
+## Definition of Done
+
+Unit tests passing is **not** done. This project once had 346 green tests
+while the app showed a blank screen — the gap was integration. Before
+committing:
+
+1. `python3 -m pytest tests/ -q` — all green, no skips you added.
+2. `python3 -m ruff check` on every file you touched — clean.
+3. **Run the real thing**: `echo "<prompt>" | python3 -m brikie --set
+   default` (a local vLLM serves `deepseek-v4-flash-spark` at
+   `localhost:8000/v1`). Watch your feature actually work end to end.
+   For interactive-only behavior, use `script -qec "python3 -m brikie
+   --set <set>" /dev/null` to fake a TTY.
+4. `git status` — confirm everything you created is actually staged.
+   (An unanchored gitignore once silently dropped the entire Build Set
+   system from the repo. Anchor ignore patterns to the root: `/build/`.)
+
+## Code standards
+
+- Python 3.11+, asyncio, full type hints. Match the existing style:
+  module docstring stating purpose, section-divider comments, Google-style
+  arg docs on public methods.
+- No placeholders, no stubs, no "rest of code here", no simulated
+  results presented as real ones. If a feature can't be real yet (e.g.
+  nothing answers the Foreman's queue until Phase C), make the limitation
+  explicit in behavior — time out honestly, log it, surface it — never
+  fake success.
+- Catch narrow exceptions. A brick failure degrades that brick, not the
+  Baseplate.
+- Commit messages: conventional prefix (`feat:`, `fix:`, `chore:`),
+  body explains *why* and what was verified.
 
 ## Gotchas
 
-- This is a **greenfield project** — there is no code yet. `design.md` is the only spec.
-- No build system, tests, or configs exist until Phase 1 creates them.
-- The design references external projects (oh-my-openagent, lossless-claw, MemPalace, CloakBrowser, Karpathy LLM Wiki). Use them as inspiration, not drop-in copies.
-
-## Important
-- No lazy implementations. When writing or modifying files, you must output the complete, fully functional code. Do not use placeholders like // ... rest of code here.
-
+- `*.db` files (lcm/mempalace/wiki) are written to the cwd and
+  gitignored — never commit them, never assume they exist.
+- `brikie.egg-info/` and `.omo/` are local artifacts; ignore them.
+- The `afk` set's `/afk` currently runs bounded heuristic cycles with an
+  evaluation timeout — by design, until Phase C lands the real actors.
