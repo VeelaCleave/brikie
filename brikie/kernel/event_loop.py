@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Max provider→tool→provider iterations per user turn.
-MAX_AGENT_STEPS = 25
+MAX_AGENT_STEPS = 500
 
 # AFK mode defaults: bounded by default, '/afk inf' for the endless loop.
 DEFAULT_AFK_CYCLES = 3
@@ -135,6 +135,7 @@ class EventLoop:
             "base_url": base_url,
             "bricks": [b.name for b in self._registry._bricks.values()],
             "tool_count": len(self._collect_tool_schemas()),
+            "souls": list(self._souls.keys()),
         }
         for iface in self._registry.get_all(InterfaceBrick):
             if hasattr(iface, "render_startup"):
@@ -239,6 +240,12 @@ class EventLoop:
             for brick in self._registry._bricks.values():
                 brk = getattr(brick, "BRICK_NUMBER", "BRK-???")
                 lines.append(f"{brk}  {brick.name}  ({type(brick).__name__})")
+            if self._souls:
+                lines.append("")
+                lines.append(f"--- {len(self._souls)} soul(s) loaded ---")
+                for name, soul_obj in self._souls.items():
+                    brk = getattr(soul_obj, "BRICK_NUMBER", "BRK-???")
+                    lines.append(f"  {brk}  {name}  ({type(soul_obj).__name__})")
             await self._emit_info("seated bricks", "\n".join(lines) or "none")
             return True
         if cmd == "/clear":

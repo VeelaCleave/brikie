@@ -1,6 +1,6 @@
 {
   "name": "default",
-  "description": "Full-stack Brikie: memory, logging, security, improvement — let's break stuff. (File tools + CloakBrowser + local deepseek-v4-flash)",
+  "description": "Full-stack Brikie: memory, logging, security, improvement, and AFK souls — let's break stuff. (File tools + CloakBrowser + local deepseek-v4-flash)",
   "bricks": [
     {
       "brk": "BRK-200",
@@ -13,6 +13,9 @@
     {"brk": "BRK-300"},
     {"brk": "BRK-410"},
     {"brk": "BRK-420"},
+    {"brk": "BRK-500"},
+    {"brk": "BRK-510"},
+    {"brk": "BRK-540"},
     {"brk": "BRK-600"},
     {"brk": "BRK-610"},
     {"brk": "BRK-620"},

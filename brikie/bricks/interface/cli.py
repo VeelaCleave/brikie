@@ -3,12 +3,12 @@
 A flowing, scrollback-friendly TUI in the style of modern agent CLIs:
 
 - Gradient ASCII banner with brick motif on boot
-- Startup summary panel (provider, bricks, tools)
+- Startup summary panel (provider, bricks, souls, tools)
 - Markdown-rendered agent responses
 - Model thinking shown as dim italic blocks
 - Tool calls and results traced inline
 - Spinner while the model is working
-- Status toolbar (model / tokens / bricks / tools) while typing
+- Status toolbar (model / tokens / bricks / souls / tools) while typing
 - Plain-text mode when stdin/stdout is not a TTY (pipes, CI)
 
 The Baseplate event loop talks to this brick through the InterfaceBrick
@@ -65,6 +65,7 @@ _PROMPT_STYLE = Style.from_dict({
     "prompt": "#ff762e bold",
     "bottom-toolbar": "#9a9a9a bg:#1c1c28",
     "bottom-toolbar.key": "#ff9e4f bg:#1c1c28 bold",
+    "bottom-toolbar.soul": "#b48ead bg:#1c1c28",
     "auto-suggestion": "#5a5a5a",
 })
 
@@ -112,6 +113,7 @@ class CLIBrick(InterfaceBrick):
         # Toolbar state
         self._model_name = "—"
         self._brick_count = 0
+        self._soul_names: List[str] = []
         self._tool_count = 0
         self._tokens_in = 0
         self._tokens_out = 0
@@ -185,6 +187,7 @@ class CLIBrick(InterfaceBrick):
         self._model_name = info.get("model", self._model_name)
         bricks: List[str] = info.get("bricks", [])
         self._brick_count = len(bricks)
+        self._soul_names = info.get("souls", [])
         self._tool_count = info.get("tool_count", 0)
 
         grid = Text()
@@ -195,6 +198,10 @@ class CLIBrick(InterfaceBrick):
         grid.append("\n  bricks  ", style="dim")
         grid.append(f"{self._brick_count} seated", style="bold")
         grid.append(f"  ·  {', '.join(bricks)}", style="#c8855a")
+        if self._soul_names:
+            grid.append("\n  souls   ", style="dim")
+            grid.append(f"{len(self._soul_names)} loaded", style="bold #b48ead")
+            grid.append(f"  ·  {', '.join(self._soul_names)}", style="#b48ead")
         grid.append("\n  tools   ", style="dim")
         grid.append(f"{self._tool_count} available", style="bold")
         self._console.print(Panel(
@@ -230,12 +237,18 @@ class CLIBrick(InterfaceBrick):
 
     def _toolbar(self) -> FormattedText:
         tokens = f"{self._tokens_in:,}↑ {self._tokens_out:,}↓"
-        return FormattedText([
+        items = [
             ("class:bottom-toolbar.key", f" {self._model_name} "),
             ("class:bottom-toolbar", "│"),
             ("class:bottom-toolbar", f" tok {tokens} "),
             ("class:bottom-toolbar", "│"),
             ("class:bottom-toolbar", f" bricks {self._brick_count} "),
+        ]
+        if self._soul_names:
+            items.append(("class:bottom-toolbar", "│"))
+            soul_label = f" souls {len(self._soul_names)} "
+            items.append(("class:bottom-toolbar.soul", soul_label))
+        items.extend([
             ("class:bottom-toolbar", "│"),
             ("class:bottom-toolbar", f" tools {self._tool_count} "),
             ("class:bottom-toolbar", "│"),
@@ -243,6 +256,7 @@ class CLIBrick(InterfaceBrick):
             ("class:bottom-toolbar", "│"),
             ("class:bottom-toolbar.key", " /exit "),
         ])
+        return FormattedText(items)
 
     # ------------------------------------------------------------------
     # Output — transcript rendering

@@ -5,6 +5,7 @@ Tools:
     - read_file: Read a file from disk by path.
     - write_file: Write content to a file (creates parent dirs).
     - glob_files: List files matching a glob pattern.
+    - edit_file: Edit a file by finding and replacing text (surgical, single replacement).
     - grep_files: Search file contents with a regex pattern.
     - lsp_diagnostics: Get LSP diagnostics for a file or directory.
 """
@@ -49,6 +50,7 @@ class ShellToolBrick(ToolBrick):
         - glob_files: List files matching a glob pattern.
         - grep_contents: Search file contents with a regex pattern.
         - lsp_diagnostics: Get LSP diagnostics for a file or directory.
+        - edit_file: Edit a file by finding and replacing text.
     """
 
     tools: List[Dict[str, Any]] = [
@@ -219,6 +221,34 @@ class ShellToolBrick(ToolBrick):
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "edit_file",
+                "description": "Edit a file by finding and replacing text. Does a single replacement of the first match. "
+                               "Surgical alternative to write_file when you only need to change specific lines. "
+                               "Returns a diff preview of what changed.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "filePath": {
+                            "type": "string",
+                            "description": "Absolute path to the file to edit.",
+                        },
+                        "oldString": {
+                            "type": "string",
+                            "description": "The exact text to find and replace (first occurrence only). "
+                                           "Must match a contiguous block of the file content exactly.",
+                        },
+                        "newString": {
+                            "type": "string",
+                            "description": "The replacement text.",
+                        },
+                    },
+                    "required": ["filePath", "oldString", "newString"],
+                },
+            },
+        },
     ]
 
     def __init__(
@@ -245,6 +275,8 @@ class ShellToolBrick(ToolBrick):
             return await self._read_file(args)
         elif name == "write_file":
             return await self._write_file(args)
+        elif name == "edit_file":
+            return await self._edit_file(args)
         elif name == "glob_files":
             return await self._glob_files(args)
         elif name == "grep_contents":
@@ -253,10 +285,6 @@ class ShellToolBrick(ToolBrick):
             return await self._lsp_diagnostics(args)
         else:
             raise KeyError(f"Unknown tool: {name}")
-
-    # ------------------------------------------------------------------
-    # bash_execute
-    # ------------------------------------------------------------------
 
     async def _bash_execute(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Run a shell command in a subprocess."""
@@ -421,6 +449,92 @@ class ShellToolBrick(ToolBrick):
             return {"error": str(exc)}
 
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # edit_file
+    # ------------------------------------------------------------------
+
+    async def _edit_file(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Edit a file by finding and replacing the first occurrence of oldString with newString.
+
+        Reads the file, performs a single replacement, writes it back,
+        and returns a diff preview showing what changed.
+        """
+        file_path = args.get("filePath", "")
+        old_string = args.get("oldString", "")
+        new_string = args.get("newString", "")
+
+        if not file_path:
+            return {"error": "No filePath provided."}
+        if not old_string:
+            return {"error": "No oldString provided."}
+        if new_string is None:
+            new_string = ""
+
+        path = Path(file_path).expanduser().resolve()
+        if not path.exists():
+            return {"error": f"File not found: {file_path}"}
+        if not path.is_file():
+            return {"error": f"Not a file: {file_path}"}
+
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except PermissionError:
+            return {"error": f"Permission denied: {file_path}"}
+        except Exception as exc:
+            return {"error": str(exc)}
+
+        if old_string not in text:
+            return {
+                "error": f"oldString not found in {file_path}. "
+                         "Check for exact match including whitespace.",
+                "filePath": str(path),
+            }
+
+        # Perform a single replacement (first occurrence)
+        new_text = text.replace(old_string, new_string, 1)
+
+        # Build a simple diff preview
+        old_lines = text.splitlines()
+        new_lines_split = new_text.splitlines()
+
+        # Find the first differing line
+        diff_start = 0
+        for diff_start in range(min(len(old_lines), len(new_lines_split))):
+            if old_lines[diff_start] != new_lines_split[diff_start]:
+                break
+        else:
+            diff_start = min(len(old_lines), len(new_lines_split))
+
+        # Count how many lines differ
+        diff_lines_changed = abs(len(new_lines_split) - len(old_lines))
+        preview_lines = []
+        context = 2  # lines of context
+        for idx in range(max(0, diff_start - context), min(len(old_lines), diff_start + context + diff_lines_changed + 2)):
+            line_no = idx + 1
+            if idx < len(old_lines) and idx < len(new_lines_split):
+                if old_lines[idx] != new_lines_split[idx]:
+                    preview_lines.append(f"-{line_no}: {old_lines[idx][:120]}")
+                    preview_lines.append(f"+{line_no}: {new_lines_split[idx][:120]}")
+                elif idx >= diff_start - context:
+                    preview_lines.append(f" {line_no}: {old_lines[idx][:120]}")
+            elif idx < len(old_lines):
+                preview_lines.append(f"-{line_no}: {old_lines[idx][:120]}")
+            else:
+                preview_lines.append(f"+{line_no}: {new_lines_split[idx][:120]}")
+
+        try:
+            path.write_text(new_text, encoding="utf-8")
+            return {
+                "success": True,
+                "filePath": str(path),
+                "bytes_written": len(new_text.encode("utf-8")),
+                "diff_preview": "\n".join(preview_lines),
+            }
+        except PermissionError:
+            return {"error": f"Permission denied: {file_path}"}
+        except Exception as exc:
+            return {"error": str(exc)}
+
     # glob_files
     # ------------------------------------------------------------------
 
