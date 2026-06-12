@@ -31,6 +31,7 @@ BRICK_INDEX: Dict[str, str] = {
     # ── Interface Bricks (300-399) ────────────────────────────────────
     "BRK-300": "brikie.bricks.interface.cli.CLIBrick",
     "BRK-310": "brikie.bricks.interface.event_bus.InternalEventBusBrick",
+    "BRK-320": "brikie.bricks.interface.telegram.TelegramBrick",
 
     # ── Tool Bricks (400-499) ─────────────────────────────────────────
     "BRK-410": "brikie.bricks.tool.file_tools.ShellToolBrick",

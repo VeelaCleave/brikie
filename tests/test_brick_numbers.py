@@ -3,6 +3,7 @@ from __future__ import annotations
 from brikie.bricks.improvement.auto_fixer import AutoFixerBrick
 from brikie.bricks.interface.cli import CLIBrick
 from brikie.bricks.interface.event_bus import InternalEventBusBrick
+from brikie.bricks.interface.telegram import TelegramBrick
 from brikie.bricks.logging.diagnostics import DiagnosticsCollectorBrick
 from brikie.bricks.logging.token_logger import TokenLoggerBrick
 from brikie.bricks.logging.tool_tracer import ToolTracerBrick
@@ -30,6 +31,7 @@ _CONCRETE_BRICKS = [
     (HTTPProvider, "BRK-200"),
     (CLIBrick, "BRK-300"),
     (InternalEventBusBrick, "BRK-310"),
+    (TelegramBrick, "BRK-320"),
     (ShellToolBrick, "BRK-410"),
     (CloakBrowserBrick, "BRK-420"),
     (GitHubBrick, "BRK-430"),
@@ -73,7 +75,7 @@ class TestBrickNumbers:
 
     def test_registry_count(self):
         """BRICK_NUMBERS dict covers all concrete bricks + ABCs."""
-        assert len(BRICK_NUMBERS) == 29
+        assert len(BRICK_NUMBERS) == 30
 
     def test_all_numbers_have_brk_prefix(self):
         """Every entry should start with BRK-."""

@@ -52,6 +52,7 @@ class CatalogEntry:
 CATALOG: Dict[str, List[CatalogEntry]] = {
     "Interface Bricks (pick at least 1)": [
         CatalogEntry("BRK-300", "CLI", "Terminal interface with rich TUI rendering", default=True),
+        CatalogEntry("BRK-320", "Telegram", "Chat with your agent from your phone — slash commands included"),
     ],
     "Provider Bricks (pick exactly 1)": [
         CatalogEntry(

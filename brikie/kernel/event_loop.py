@@ -93,6 +93,8 @@ class EventLoop:
         self._afk_watchers: List[Any] = []
         self._tokens_in = 0
         self._tokens_out = 0
+        # Pending get_input() tasks when several interfaces are seated.
+        self._input_tasks: Dict[str, asyncio.Task] = {}
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -134,6 +136,9 @@ class EventLoop:
 
     async def _phase_shutdown(self) -> None:
         """Gracefully shut down every brick (HTTP clients, DBs, TUI…)."""
+        for task in self._input_tasks.values():
+            task.cancel()
+        self._input_tasks.clear()
         for brick in list(self._registry._bricks.values()):
             try:
                 await brick.shutdown()
@@ -897,12 +902,39 @@ class EventLoop:
     # ------------------------------------------------------------------
 
     async def _capture_input(self) -> str:
-        """Capture input from the first responsive Interface Brick."""
-        for iface in self._registry.get_all(InterfaceBrick):
-            text = await iface.get_input()
-            if text:
-                return text
-        return ""
+        """Capture input from whichever Interface Brick speaks first.
+
+        With one interface this is a plain await. With several (e.g. CLI
+        + Telegram) their ``get_input()`` calls race; the first to
+        produce text wins the turn. Pending reads persist across turns —
+        an interface's input is never cancelled, only consumed later.
+        """
+        ifaces = self._registry.get_all(InterfaceBrick)
+        if not ifaces:
+            return ""
+        if len(ifaces) == 1:
+            return (await ifaces[0].get_input()) or ""
+
+        for iface in ifaces:
+            if iface.name not in self._input_tasks:
+                self._input_tasks[iface.name] = asyncio.create_task(
+                    iface.get_input(), name=f"input:{iface.name}"
+                )
+
+        done, _pending = await asyncio.wait(
+            set(self._input_tasks.values()),
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        winner = next(iter(done))
+        for name, task in list(self._input_tasks.items()):
+            if task is winner:
+                del self._input_tasks[name]
+                break
+        try:
+            return (winner.result() or "").strip()
+        except Exception:
+            logger.exception("Interface input failed")
+            return ""
 
     def _set_busy(self, busy: bool, label: str = "thinking…") -> None:
         for iface in self._registry.get_all(InterfaceBrick):
