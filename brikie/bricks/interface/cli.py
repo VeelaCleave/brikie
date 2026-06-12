@@ -105,6 +105,7 @@ class CLIBrick(InterfaceBrick):
         self._name = "cli"
         self._console = Console(highlight=False)
         self._session: Optional[PromptSession] = None
+        self._booted = False
         self._stdin_lines: List[str] = []
         self._is_tty = sys.stdin.isatty() and sys.stdout.isatty()
         self._status: Optional[Status] = None
@@ -124,6 +125,11 @@ class CLIBrick(InterfaceBrick):
     # ------------------------------------------------------------------
 
     async def init(self) -> None:
+        if self._booted:
+            # Re-mounted (e.g. returning from AFK mode) — keep the transcript.
+            await super().init()
+            return
+        self._booted = True
         if self._is_tty:
             self._session = self._build_session()
         else:
@@ -292,6 +298,20 @@ class CLIBrick(InterfaceBrick):
         line.append(preview, style="dim")
         if len(result) > _MAX_RESULT_PREVIEW:
             line.append(f"  ({len(result):,} chars)", style="dim italic")
+        self._console.print(line)
+
+    async def render_afk_event(self, actor: str, text: str) -> None:
+        """Narrate one stage of the AFK negotiation in the transcript."""
+        self._stop_spinner()
+        styles = {
+            "dreamer": "#b48ead",
+            "foreman": "#ff9e4f",
+            "mason": "#f9c74f",
+        }
+        style = styles.get(actor, "dim")
+        line = Text("  ◆ ", style=style)
+        line.append(f"{actor:<8}", style=f"bold {style}")
+        line.append(text, style="#9a9a9a")
         self._console.print(line)
 
     async def render_info(self, title: str, body: str) -> None:

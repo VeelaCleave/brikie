@@ -82,6 +82,7 @@ CATALOG: Dict[str, List[CatalogEntry]] = {
     "Soul Bricks (needed for /afk)": [
         CatalogEntry("BRK-500", "Foreman", "Site-boss orchestrator: plans, delegates, verifies"),
         CatalogEntry("BRK-510", "Dreamer", "Lateral thinker: mines logs, proposes improvements"),
+        CatalogEntry("BRK-540", "Mason", "Builder sub-agent that executes approved jobs"),
     ],
 }
 

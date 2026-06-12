@@ -56,6 +56,7 @@ BRICK_NUMBERS: Dict[str, str] = {
     "Dreamer": "BRK-510",
     "CryptoTradingAgent": "BRK-520",
     "WebDesignAgent": "BRK-530",
+    "Mason": "BRK-540",
 
     # ── Memory Bricks (600-699) ───────────────────────────────────────
     "LcmBrick": "BRK-600",

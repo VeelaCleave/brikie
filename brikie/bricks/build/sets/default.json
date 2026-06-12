@@ -1,6 +1,6 @@
 {
   "name": "default",
-  "description": "Default Brick Set: file tools + CloakBrowser web browsing + local deepseek-v4-flash",
+  "description": "Full-stack Brikie: memory, logging, security, improvement — let's break stuff. (File tools + CloakBrowser + local deepseek-v4-flash)",
   "bricks": [
     {
       "brk": "BRK-200",
@@ -12,6 +12,14 @@
     },
     {"brk": "BRK-300"},
     {"brk": "BRK-410"},
-    {"brk": "BRK-420"}
+    {"brk": "BRK-420"},
+    {"brk": "BRK-600"},
+    {"brk": "BRK-610"},
+    {"brk": "BRK-620"},
+    {"brk": "BRK-700"},
+    {"brk": "BRK-710"},
+    {"brk": "BRK-720"},
+    {"brk": "BRK-800"},
+    {"brk": "BRK-900"}
   ]
 }

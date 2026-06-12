@@ -73,16 +73,43 @@ class AFKProtocolEngine:
         foreman_soul: Optional[Foreman] = None,
         diagnostics: Optional[DiagnosticsCollectorBrick] = None,
         on_execute: Optional[Callable[[str, Dict[str, Any]], Any]] = None,
+        dreamer_propose: Optional[Callable[[str, int], Any]] = None,
+        on_stage: Optional[Callable[[str, str], Any]] = None,
+        evaluation_timeout: float = EVALUATION_TIMEOUT_SECONDS,
     ) -> None:
+        """Args beyond the souls and bus:
+
+        on_execute: async (title, payload) -> bool — runs an approved
+            proposal (Phase C wires a Mason agent here).
+        dreamer_propose: async (context, max_proposals) -> List[Proposal] —
+            LLM-driven proposal generation (a DreamerActor method). When
+            absent, the engine falls back to threshold heuristics.
+        on_stage: async (actor, text) — observability callback so
+            interfaces can narrate the negotiation live.
+        evaluation_timeout: seconds to wait for a foreman.decision before
+            treating a proposal as rejected.
+        """
         self._event_bus = event_bus
         self._dreamer_soul = dreamer_soul
         self._foreman_soul = foreman_soul
         self._diagnostics = diagnostics
         self._on_execute = on_execute
+        self._dreamer_propose = dreamer_propose
+        self._on_stage = on_stage
+        self._evaluation_timeout = evaluation_timeout
         self._cycle = 0
         self._consecutive_failures = 0
         self._running = False
         self._results: List[AFKCycleResult] = []
+
+    async def _stage(self, actor: str, text: str) -> None:
+        """Narrate a negotiation stage to the observability callback."""
+        if self._on_stage is None:
+            return
+        try:
+            await self._on_stage(actor, text)
+        except Exception:
+            logger.exception("on_stage callback failed")
 
     @property
     def running(self) -> bool:
@@ -165,11 +192,14 @@ class AFKProtocolEngine:
                 result.approved_count += 1
 
                 # Stage 3: EXECUTE — run the approved proposal
+                await self._stage("mason", f"building: {proposal.title}")
                 success = await self._execute_phase(proposal)
                 if success:
                     result.executed_count += 1
+                    await self._stage("mason", f"✓ completed: {proposal.title}")
                 else:
                     result.failed_count += 1
+                    await self._stage("mason", f"✗ failed: {proposal.title}")
             else:
                 result.failed_count += 1
 
@@ -193,19 +223,40 @@ class AFKProtocolEngine:
         return result
 
     async def _dream_phase(self) -> List[Proposal]:
-        """Stage 1: Query diagnostics and generate proposals.
+        """Stage 1: Generate proposals.
 
-        Analyzes the last cycle's diagnostics to identify improvement
-        opportunities — error rates, slow tool calls, token usage,
-        and failed proposals from previous cycles.
+        When a ``dreamer_propose`` callable is wired (the LLM-driven
+        DreamerActor), the Dreamer persona reads a diagnostics digest and
+        formulates proposals itself. Without it, the engine falls back to
+        deterministic threshold heuristics over the same diagnostics.
         """
         proposals: List[Proposal] = []
-        if self._dreamer_soul is None or self._diagnostics is None:
+        if self._dreamer_soul is None:
             return proposals
 
         max_proposals = self._dreamer_soul.behavioral_constraints.get(
             "max_proposals_per_cycle", 5
         )
+
+        if self._dreamer_propose is not None:
+            await self._stage("dreamer", "reviewing diagnostics and dreaming…")
+            context = await self._build_dream_context()
+            proposals = list(await self._dreamer_propose(context, max_proposals))
+            for i, proposal in enumerate(proposals):
+                if not proposal.proposal_id:
+                    proposal.proposal_id = f"afk-{self._cycle}-{i + 1}"
+            if proposals:
+                for p in proposals:
+                    await self._stage(
+                        "dreamer",
+                        f"proposes [{p.impact}/{p.complexity}] {p.title}",
+                    )
+            else:
+                await self._stage("dreamer", "no proposals this cycle")
+            return proposals[:max_proposals]
+
+        if self._diagnostics is None:
+            return proposals
 
         stats = await self._diagnostics.get_session_stats()
 
@@ -271,6 +322,52 @@ class AFKProtocolEngine:
         # Return only the first N proposals per soul constraints
         return proposals[:max_proposals]
 
+    async def _build_dream_context(self) -> str:
+        """Digest diagnostics into a prompt-sized state report for the Dreamer."""
+        if self._diagnostics is None:
+            return (
+                "No diagnostics bricks are seated this session, so there is "
+                "no telemetry to mine. Propose only broadly useful, "
+                "low-risk improvements — or nothing."
+            )
+
+        parts: List[str] = []
+        try:
+            stats = await self._diagnostics.get_session_stats()
+            total_ops = stats.tool_success_count + stats.tool_failure_count
+            parts.append(
+                "Session stats: "
+                f"{stats.total_llm_calls} LLM calls, "
+                f"{total_ops} tool calls "
+                f"({stats.tool_failure_count} failed), "
+                f"avg tool latency {stats.avg_tool_latency_ms:.0f}ms, "
+                f"token cost ${stats.token_cost:.4f}."
+            )
+        except Exception as exc:
+            parts.append(f"Session stats unavailable: {exc}")
+
+        try:
+            events = await self._diagnostics.get_last_n_events(n=15)
+            if events:
+                lines = []
+                for e in events:
+                    etype = getattr(e, "event_type", "?")
+                    payload = str(getattr(e, "payload", ""))[:120]
+                    lines.append(f"- {etype}: {payload}")
+                parts.append("Recent events:\n" + "\n".join(lines))
+        except Exception as exc:
+            parts.append(f"Recent events unavailable: {exc}")
+
+        if self._results:
+            last = self._results[-1]
+            parts.append(
+                f"Previous cycle: {last.proposals_count} proposals, "
+                f"{last.approved_count} approved, {last.executed_count} "
+                f"executed, {last.failed_count} failed."
+            )
+
+        return "\n\n".join(parts)
+
     async def _evaluate_phase(self, proposal: Proposal) -> bool:
         """Stage 2: Foreman evaluates a proposal.
 
@@ -306,14 +403,17 @@ class AFKProtocolEngine:
             try:
                 response = await asyncio.wait_for(
                     self._event_bus.consume("dreamer"),
-                    timeout=EVALUATION_TIMEOUT_SECONDS,
+                    timeout=self._evaluation_timeout,
                 )
             except asyncio.TimeoutError:
-                # Phase C attaches a real Foreman actor to answer the bus;
-                # until then an unanswered evaluation is an honest reject.
+                # An unanswered evaluation is an honest reject — never
+                # fake a sign-off when no Foreman actor is on the bus.
                 logger.info(
                     "Proposal '%s': no evaluator responded within %.0fs — rejected.",
-                    proposal.title, EVALUATION_TIMEOUT_SECONDS,
+                    proposal.title, self._evaluation_timeout,
+                )
+                await self._stage(
+                    "foreman", f"no response in {self._evaluation_timeout:.0f}s — rejected: {proposal.title}"
                 )
                 return False
 
@@ -322,18 +422,29 @@ class AFKProtocolEngine:
 
             if decision == "approve":
                 logger.info("Proposal '%s' APPROVED.", proposal.title)
+                await self._stage("foreman", f"APPROVED: {proposal.title}")
                 return True
             elif decision == "defer" and attempt < max_attempts - 1:
                 logger.info(
                     "Proposal '%s' DEFERRED (attempt %d/%d): %s",
                     proposal.title, attempt + 1, max_attempts, feedback,
                 )
-                proposal.description = feedback
+                await self._stage(
+                    "foreman", f"DEFERRED: {proposal.title} — {feedback[:120]}"
+                )
+                # Carry the feedback forward without losing the original spec.
+                proposal.description = (
+                    f"{proposal.description}\n\nForeman feedback "
+                    f"(attempt {attempt + 1}): {feedback}"
+                )
                 continue
             else:
                 logger.info(
                     "Proposal '%s' REJECTED (attempt %d/%d): %s",
                     proposal.title, attempt + 1, max_attempts, feedback,
+                )
+                await self._stage(
+                    "foreman", f"REJECTED: {proposal.title} — {feedback[:120]}"
                 )
                 return False
 

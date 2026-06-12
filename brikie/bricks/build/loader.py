@@ -43,6 +43,7 @@ BRICK_INDEX: Dict[str, str] = {
     "BRK-510": "brikie.bricks.soul.dreamer.Dreamer",
     "BRK-520": "brikie.bricks.soul.crypto_trading_agent.CryptoTradingAgent",
     "BRK-530": "brikie.bricks.soul.web_design_agent.WebDesignAgent",
+    "BRK-540": "brikie.bricks.soul.mason.Mason",
 
     # ── Memory Bricks (600-699) ───────────────────────────────────────
     "BRK-600": "brikie.bricks.memory.lcm.lcm_brick.LcmBrick",

@@ -33,11 +33,21 @@ logger = logging.getLogger(__name__)
 # Max provider→tool→provider iterations per user turn.
 MAX_AGENT_STEPS = 25
 
+# AFK mode defaults: bounded by default, '/afk inf' for the endless loop.
+DEFAULT_AFK_CYCLES = 3
+MAX_MASON_STEPS = 12
+
+_MASON_FALLBACK_PROMPT = (
+    "You are a Mason — a builder sub-agent. Execute exactly the job you "
+    "are given using your tools, verify the result, and report concisely. "
+    "End your final message with 'TASK COMPLETE' or 'TASK FAILED: <reason>'."
+)
+
 _HELP_TEXT = """\
 /help    show this help
 /bricks  list seated bricks
 /clear   clear screen and conversation history
-/afk     enter autonomous AFK mode (requires souls + AFK manager)
+/afk     enter autonomous AFK mode: /afk [cycles|inf] (default 3)
 /exit    quit brikie (also /quit, Ctrl-C, Ctrl-D)\
 """
 
@@ -61,6 +71,7 @@ class EventLoop:
         self._afk_manager = afk_manager
         self._system_prompt = system_prompt
         self._souls = souls or {}
+        self._afk_watchers: List[Any] = []
         self._tokens_in = 0
         self._tokens_out = 0
 
@@ -236,7 +247,7 @@ class EventLoop:
                 if hasattr(iface, "clear_screen"):
                     iface.clear_screen()
             return True
-        if cmd == "/afk":
+        if cmd == "/afk" or cmd.startswith("/afk "):
             missing = [s for s in ("dreamer", "foreman") if s not in self._souls]
             if self._afk_manager is None or missing:
                 needs = f" (missing souls: {', '.join(missing)})" if missing else ""
@@ -247,9 +258,29 @@ class EventLoop:
                     "souls — e.g.  brikie --set afk",
                 )
             else:
-                await self._enter_afk_mode()
+                cycles = self._parse_afk_cycles(cmd)
+                if cycles is None:
+                    await self._emit_info(
+                        "afk", "Usage: /afk [cycles] — a number, or 'inf' for endless."
+                    )
+                else:
+                    await self._enter_afk_mode(cycles=cycles)
             return True
         return False
+
+    @staticmethod
+    def _parse_afk_cycles(cmd: str) -> Optional[int]:
+        """Parse '/afk', '/afk 5', '/afk inf'. None means invalid input."""
+        arg = cmd.removeprefix("/afk").strip()
+        if not arg:
+            return DEFAULT_AFK_CYCLES
+        if arg in ("inf", "infinite", "forever"):
+            return 0
+        try:
+            n = int(arg)
+            return n if n >= 0 else None
+        except ValueError:
+            return None
 
     # ------------------------------------------------------------------
     # Agent loop — provider ⇄ tools until a text answer
@@ -344,16 +375,44 @@ class EventLoop:
     # AFK mode
     # ------------------------------------------------------------------
 
-    async def _enter_afk_mode(self) -> None:
-        """Enter autonomous AFK mode: swap interfaces, start protocol engine."""
-        from brikie.kernel.afk_protocol import AFKProtocolEngine
+    async def _enter_afk_mode(self, cycles: int = DEFAULT_AFK_CYCLES) -> None:
+        """Enter autonomous AFK mode.
 
-        await self._emit_info("afk", "Entering autonomous loop…")
+        Swaps the CLI for the internal event bus, starts a ForemanActor
+        serving the bus, and runs the Dreamer ⇄ Foreman negotiation loop.
+        Approved proposals are executed by a Mason sub-agent with the
+        registered tool bricks (security hooks included).
+        """
+        from brikie.kernel.afk_protocol import AFKProtocolEngine
+        from brikie.kernel.soul_actor import DreamerActor, ForemanActor
+
+        providers = self._registry.get_all(ProviderBrick)
+        if not providers:
+            await self._emit_info("afk", "No Provider Brick available — cannot dream.")
+            return
+        provider = providers[0]
 
         dreamer_soul = self._souls.get("dreamer")
         foreman_soul = self._souls.get("foreman")
+
+        # Interfaces captured before the swap keep narrating the
+        # negotiation even while the CLI is unmounted from the registry.
+        self._afk_watchers = list(self._registry.get_all(InterfaceBrick))
+
+        label = "∞" if cycles == 0 else str(cycles)
+        await self._emit_info(
+            "afk",
+            f"Entering autonomous loop ({label} cycle{'s' if cycles != 1 else ''}). "
+            "Dreamer proposes → Foreman signs off → Masons build.",
+        )
+
         souls = [s for s in (dreamer_soul, foreman_soul) if s is not None]
         await self._afk_manager.enter_afk_mode(souls=souls)
+        bus = self._afk_manager.event_bus
+
+        dreamer = DreamerActor(dreamer_soul, provider)
+        foreman = ForemanActor(foreman_soul, provider, bus)
+        foreman_task = asyncio.create_task(foreman.serve())
 
         diagnostics = next(
             (b for b in self._registry._bricks.values()
@@ -361,35 +420,115 @@ class EventLoop:
             None,
         )
         engine = AFKProtocolEngine(
-            event_bus=self._afk_manager.event_bus,
+            event_bus=bus,
             dreamer_soul=dreamer_soul,
             foreman_soul=foreman_soul,
             diagnostics=diagnostics,
-            on_execute=self._on_afk_execute,
+            on_execute=self._run_mason_task,
+            dreamer_propose=dreamer.propose,
+            on_stage=self._emit_afk,
+            evaluation_timeout=120.0,
         )
 
-        # Phase B: bounded heuristic cycles. Phase C replaces this with the
-        # continuous LLM-driven Dreamer ⇄ Foreman negotiation loop.
         try:
-            await engine.start(cycles=3, max_duration_seconds=300)
+            await engine.start(
+                cycles=cycles,
+                max_duration_seconds=0,
+            )
         except asyncio.CancelledError:
             pass
+        finally:
+            foreman_task.cancel()
+            try:
+                await foreman_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            await self._afk_manager.exit_afk_mode()
+            self._afk_watchers = []
 
-        await self._afk_manager.exit_afk_mode()
+        totals = engine.results
+        proposals = sum(r.proposals_count for r in totals)
+        executed = sum(r.executed_count for r in totals)
+        failed = sum(r.failed_count for r in totals)
+        await self._emit_info(
+            "afk",
+            f"Completed {len(totals)} cycle(s) — returned to interactive.\n"
+            f"{proposals} proposal(s), {executed} built, {failed} rejected/failed.",
+        )
 
-        summary = "Completed — returned to interactive."
-        if engine.results:
-            last = engine.results[-1]
-            summary += (
-                f"\n{last.proposals_count} proposals, "
-                f"{last.executed_count} executed, {last.failed_count} failed."
-            )
-        await self._emit_info("afk", summary)
+    async def _emit_afk(self, actor: str, text: str) -> None:
+        """Narrate an AFK negotiation stage through the watching interfaces."""
+        watchers = self._afk_watchers or self._registry.get_all(InterfaceBrick)
+        for iface in watchers:
+            if hasattr(iface, "render_afk_event"):
+                await iface.render_afk_event(actor, text)
 
-    async def _on_afk_execute(self, title: str, payload: Dict[str, Any]) -> bool:
-        """Execute an approved AFK proposal using available tool bricks."""
-        logger.info("AFK executing: %s", title)
-        return True
+    async def _run_mason_task(self, title: str, payload: Dict[str, Any]) -> bool:
+        """Execute an approved proposal with a Mason sub-agent.
+
+        The Mason runs its own bounded agent loop against the registered
+        tool bricks, with PRE_TOOL/POST_TOOL hooks dispatched so security
+        bricks stay in the path. Returns True only when the Mason itself
+        reports verified completion.
+        """
+        mason_soul = self._souls.get("mason")
+        system = mason_soul.system_prompt if mason_soul else _MASON_FALLBACK_PROMPT
+        max_steps = MAX_MASON_STEPS
+        if mason_soul:
+            max_steps = mason_soul.behavioral_constraints.get("max_steps", MAX_MASON_STEPS)
+
+        schemas = self._collect_tool_schemas()
+        messages: List[Dict[str, Any]] = [
+            {"role": "system", "content": system},
+            {
+                "role": "user",
+                "content": (
+                    f"Approved job: {title}\n\n{payload.get('description', '')}\n\n"
+                    "Execute this job now."
+                ),
+            },
+        ]
+
+        for _step in range(max_steps):
+            content, raw_calls, _meta = await self._call_providers(schemas, messages)
+
+            if not raw_calls:
+                done = "TASK COMPLETE" in content and "TASK FAILED" not in content
+                summary = content.strip().splitlines()[-1] if content.strip() else "(no report)"
+                await self._emit_afk("mason", summary[:200])
+                return done
+
+            messages.append({
+                "role": "assistant",
+                "content": content or None,
+                "tool_calls": raw_calls,
+            })
+
+            tool_calls = self._raw_to_tool_calls(raw_calls)
+            for tc in tool_calls:
+                await self._emit_afk("mason", f"→ {tc.name}({str(tc.args)[:120]})")
+
+            await self._hooks.dispatch(HookType.PRE_TOOL, HookEvent(
+                hook_type=HookType.PRE_TOOL,
+                data=tool_calls,
+                brick_name="mason",
+            ))
+            tool_calls = await self.process_tool_calls(tool_calls)
+            await self._hooks.dispatch(HookType.POST_TOOL, HookEvent(
+                hook_type=HookType.POST_TOOL,
+                data=tool_calls,
+                brick_name="mason",
+            ))
+
+            for tc in tool_calls:
+                messages.append({
+                    "role": "tool",
+                    "content": str(tc.result) if tc.result else "null",
+                    "tool_call_id": tc.tool_call_id or tc.name,
+                })
+
+        await self._emit_afk("mason", f"step budget ({max_steps}) exhausted")
+        return False
 
     # ------------------------------------------------------------------
     # Context assembly
@@ -447,6 +586,11 @@ class EventLoop:
         """Execute each tool call using registered ToolBricks."""
         tools = self._registry.get_all(ToolBrick)
         for tc in tool_calls:
+            if tc.result is not None:
+                # A PRE_TOOL hook (e.g. the command firewall) already
+                # settled this call — executing it would bypass the block.
+                logger.info("Skipping pre-settled tool call: %s", tc.name)
+                continue
             executed = False
             for tool_brick in tools:
                 tool_list = getattr(tool_brick, "tools", None)

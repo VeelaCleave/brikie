@@ -16,6 +16,7 @@ from brikie.bricks.security.sandbox import SandboxSecurityBrick
 from brikie.bricks.soul.crypto_trading_agent import CryptoTradingAgent
 from brikie.bricks.soul.dreamer import Dreamer
 from brikie.bricks.soul.foreman import Foreman
+from brikie.bricks.soul.mason import Mason
 from brikie.bricks.soul.web_design_agent import WebDesignAgent
 from brikie.bricks.tool.cloakbrowser import CloakBrowserBrick
 from brikie.bricks.tool.dummy import DummyToolBrick
@@ -37,6 +38,7 @@ _CONCRETE_BRICKS = [
     (Dreamer, "BRK-510"),
     (CryptoTradingAgent, "BRK-520"),
     (WebDesignAgent, "BRK-530"),
+    (Mason, "BRK-540"),
     (LcmBrick, "BRK-600"),
     (MempalaceBrick, "BRK-610"),
     (WikiBrick, "BRK-620"),
@@ -71,7 +73,7 @@ class TestBrickNumbers:
 
     def test_registry_count(self):
         """BRICK_NUMBERS dict covers all concrete bricks + ABCs."""
-        assert len(BRICK_NUMBERS) == 28
+        assert len(BRICK_NUMBERS) == 29
 
     def test_all_numbers_have_brk_prefix(self):
         """Every entry should start with BRK-."""

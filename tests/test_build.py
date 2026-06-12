@@ -117,7 +117,7 @@ class TestBuildLoader:
         registry = BrickRegistry()
         loader = BuildLoader(registry)
         build = loader.load(str(Path(__file__).resolve().parent.parent / "brikie/bricks/build/sets/afk.json"))
-        assert set(build.souls) == {"foreman", "dreamer"}
+        assert set(build.souls) == {"foreman", "dreamer", "mason"}
         loader.validate_minimum_stack()
 
     def test_load_with_config(self):
