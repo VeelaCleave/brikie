@@ -14,23 +14,24 @@ installer.
 ## Quick start
 
 ```sh
-# compose your own stack at https://brikie.co, or:
-curl -fsSL "https://brikie.co/install.sh?bricks=BRK-300,BRK-200,BRK-410,BRK-420&name=custom" | sh
-brikie --set custom
-```
-
-Or just:
-
-```sh
 pip install brikie
 brikie
 ```
 
-First run on a terminal opens a 60-second setup: brikie detects running
+That's it. First run opens a 60-second setup: brikie detects running
 local servers (Ollama, LM Studio, vLLM) and API keys already in your
 environment, and one keystroke later you're chatting. Rerun it any time
-with `brikie --onboard`, or compose a full custom stack with
-`python3 -m brikie.install`.
+with `brikie --onboard`.
+
+Want to choose your bricks up front instead? Compose a custom stack at
+[brikie.co](https://brikie.co) and run the one-liner it gives you:
+
+```sh
+curl -fsSL "https://brikie.co/install.sh?bricks=BRK-300,BRK-200,BRK-410,BRK-420&name=custom" | sh
+brikie --set custom
+```
+
+(or locally: `python3 -m brikie.install`)
 
 ## What makes it different
 
