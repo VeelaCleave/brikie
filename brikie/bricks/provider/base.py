@@ -33,7 +33,7 @@ class ProviderBrick(ProviderBrickABC, ABC):
     @abstractmethod
     async def get_completion(
         self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]
-    ) -> tuple[str, List[Dict[str, Any]]]:
+    ) -> tuple:
         """Send a message list to the LLM and receive a text response + tool calls.
 
         Args:
@@ -41,7 +41,10 @@ class ProviderBrick(ProviderBrickABC, ABC):
             tools: Tool schemas available to the provider.
 
         Returns:
-            Tuple of (text response, list of tool-call dicts).
+            ``(content, tool_calls)`` or ``(content, tool_calls, meta)``.
+            The optional ``meta`` dict may carry ``reasoning`` (model
+            thinking), ``usage`` (token counts), and ``finish_reason``;
+            the kernel renders and logs these when present.
         """
         ...
 

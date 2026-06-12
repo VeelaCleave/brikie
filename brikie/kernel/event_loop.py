@@ -1,17 +1,23 @@
 """Asynchronous event loop for the Brikie Baseplate kernel.
 
 Orchestrates the two-phase lifecycle:
-  1. WARM_UP — await all bricks reach ACTIVE state.
+  1. WARM_UP — initialize every brick, register middleware hooks.
   2. ACTIVE — main loop: input → hooks → provider → tool execution → output.
 
-The loop routes user input through middleware hooks, calls the Provider
-Brick for LLM completion, processes tool calls, and renders responses
-through Interface Bricks.
+Each turn the loop routes user input through middleware hooks, then runs
+an iterative agent loop: call the Provider Brick, execute any requested
+tools, feed results back, and repeat until the model answers in plain
+text (or the step budget runs out).
+
+Rendering goes through a single path: the loop prefers an Interface
+Brick's rich ``render_*`` methods when present and falls back to the
+plain ``output()`` channel otherwise.
 """
 
+import asyncio
 import json
 import logging
-from typing import Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from brikie.config.types import HookEvent, HookType, Message, ToolCall
 from brikie.kernel.hooks import HookDispatcher
@@ -22,19 +28,25 @@ from brikie.bricks.logging.base import LoggingBrick
 from brikie.bricks.memory.memory_brick import MemoryBrick
 from brikie.bricks.security.base import SecurityBrick
 
+if TYPE_CHECKING:
+    from brikie.kernel.afk_manager import AFKManager
+
 logger = logging.getLogger(__name__)
+
+# Max provider→tool→provider iterations per user turn.
+MAX_AGENT_STEPS = 25
+
+_HELP_TEXT = """\
+/help    show this help
+/bricks  list seated bricks
+/clear   clear screen and conversation history
+/afk     enter autonomous AFK mode (requires souls + AFK manager)
+/exit    quit brikie (also /quit, Ctrl-C, Ctrl-D)\
+"""
 
 
 class EventLoop:
-    """Core event loop driving the Baseplate lifecycle.
-
-    Two-phase execution:
-    - WARM_UP: Initialize every registered Brick.
-    - ACTIVE: Repeatedly capture input, dispatch hooks, call the LLM,
-      execute tool calls, and render output.
-    """
-
-    MAX_CONSECUTIVE_TOOL_LOOPS = 3
+    """Core event loop driving the Baseplate lifecycle."""
 
     def __init__(
         self,
@@ -44,6 +56,7 @@ class EventLoop:
         improvement_bricks: "List[ImprovementBrick] | None" = None,
         security_bricks: "List[SecurityBrick] | None" = None,
         afk_manager: "AFKManager | None" = None,
+        system_prompt: Optional[str] = None,
     ) -> None:
         self._registry = registry
         self._state = state
@@ -52,40 +65,32 @@ class EventLoop:
         self._improvement_bricks = improvement_bricks or []
         self._security_bricks = security_bricks or []
         self._afk_manager = afk_manager
-        self._consecutive_tool_loops = 0
+        self._system_prompt = system_prompt
+        self._tokens_in = 0
+        self._tokens_out = 0
 
     # ------------------------------------------------------------------
     # Public entry point
     # ------------------------------------------------------------------
 
     async def run(self) -> None:
-        """Execute the two-phase event loop.
-
-        Phase 1 (WARM_UP):
-        - Call init() on every registered Brick so they reach ACTIVE state.
-
-        Phase 2 (ACTIVE):
-        - Continuously: capture input → PRE_PARSE → PRE_LLM → LLM
-          → POST_LLM → (tool calls: PRE_TOOL → execute → POST_TOOL →
-          POST_TOOL_CALL) → render output.
-
-        Exits on KeyboardInterrupt.
-        """
+        """Execute the two-phase event loop until interrupted."""
         await self._phase_warm_up()
 
-        interfaces = self._registry.get_all(InterfaceBrick)
-        providers = self._registry.get_all(ProviderBrick)
-
-        if not interfaces:
+        if not self._registry.get_all(InterfaceBrick):
             logger.warning("No InterfaceBrick registered.")
-        if not providers:
+        if not self._registry.get_all(ProviderBrick):
             logger.warning("No ProviderBrick registered.")
+
+        await self._announce_startup()
 
         try:
             while True:
                 await self._turn()
         except KeyboardInterrupt:
             logger.info("KeyboardInterrupt — shutting down.")
+        finally:
+            await self._phase_shutdown()
 
     # ------------------------------------------------------------------
     # Phase 1 — Warm Up
@@ -99,57 +104,69 @@ class EventLoop:
             await brick.init()
         logger.info("Warm-up complete: %d brick(s) active.", len(bricks))
 
-        # Register memory brick hooks for LCM integration
         self._register_memory_hooks()
-
         await self._register_logging_hooks()
         await self._register_improvement_hooks()
         self._register_security_hooks()
 
-    def _register_memory_hooks(self) -> None:
-        """Register MemoryBrick callbacks with the hook dispatcher.
+    async def _phase_shutdown(self) -> None:
+        """Gracefully shut down every brick (HTTP clients, DBs, TUI…)."""
+        for brick in list(self._registry._bricks.values()):
+            try:
+                await brick.shutdown()
+            except Exception:
+                logger.exception("Error shutting down brick %s", brick.name)
 
-        Memory Bricks intercept PRE_LLM and POST_LLM hooks to:
-        - Store incoming/outgoing messages in the immutable store
-        - Build compressed context windows for LLM calls
-        - Trigger DAG compaction when budget thresholds are exceeded
-        """
-        memory_bricks = self._registry.get_all(MemoryBrick)
-        for brick in memory_bricks:
-            # Register PRE_LLM hook — intercept incoming messages
+    async def _announce_startup(self) -> None:
+        """Give interfaces a boot summary once everything is warm."""
+        providers = self._registry.get_all(ProviderBrick)
+        model = next(
+            (getattr(p, "_model") for p in providers if hasattr(p, "_model")), "—"
+        )
+        base_url = next(
+            (getattr(p, "_base_url") for p in providers if hasattr(p, "_base_url")), ""
+        )
+        info = {
+            "model": model,
+            "base_url": base_url,
+            "bricks": [b.name for b in self._registry._bricks.values()],
+            "tool_count": len(self._collect_tool_schemas()),
+        }
+        for iface in self._registry.get_all(InterfaceBrick):
+            if hasattr(iface, "render_startup"):
+                await iface.render_startup(info)
+
+    def _register_memory_hooks(self) -> None:
+        """Register MemoryBrick callbacks with the hook dispatcher."""
+        for brick in self._registry.get_all(MemoryBrick):
             self._hooks.register(
                 HookType.PRE_LLM,
                 lambda data, b=brick: self._memory_pre_llm(b, data),
             )
-            # Register POST_LLM hook — intercept outgoing messages
             self._hooks.register(
                 HookType.POST_LLM,
                 lambda data, b=brick: self._memory_post_llm(b, data),
             )
             logger.info("Registered memory hooks for brick: %s", brick.name)
 
-    async def _memory_pre_llm(self, brick: MemoryBrick, data: Any) -> None:
-        """Handle PRE_LLM hook for memory bricks.
-
-        Intercepts the message history and stores each message in LCM.
-        Builds compressed context before LLM calls.
-        """
+    async def _memory_pre_llm(self, brick: MemoryBrick, data: Any) -> Any:
         session_id = await self._state.get("session_id", "default")
-        context = await brick.build_context(session_id)
-        return context
+        return await brick.build_context(session_id)
+
+    async def _memory_post_llm(self, brick: MemoryBrick, data: Any) -> None:
+        session_id = await self._state.get("session_id", "default")
+        if isinstance(data, dict):
+            content = data.get("content", "")
+            await brick.intercept_message(session_id, "assistant", content)
+        return None
 
     async def _register_logging_hooks(self) -> None:
-        logging_bricks = self._registry.get_all(LoggingBrick)
-        for brick in logging_bricks:
+        for brick in self._registry.get_all(LoggingBrick):
             callbacks = await brick.get_hook_callbacks()
             for hook_type, cb_list in callbacks.items():
                 for cb in cb_list:
                     self._hooks.register(hook_type, cb)
-            logger.info(
-                "Registered %d hook callback(s) for logging brick: %s",
-                sum(len(v) for v in callbacks.values()),
-                brick.name,
-            )
+            logger.info("Registered logging brick hooks: %s", brick.name)
 
     async def _register_improvement_hooks(self) -> None:
         for brick in self._improvement_bricks:
@@ -157,11 +174,7 @@ class EventLoop:
             for hook_type, cb_list in callbacks.items():
                 for cb in cb_list:
                     self._hooks.register(hook_type, cb)
-            logger.info(
-                "Registered improvement brick: %s (%d callback(s))",
-                brick.name,
-                sum(len(v) for v in callbacks.values()),
-            )
+            logger.info("Registered improvement brick hooks: %s", brick.name)
 
     def _register_security_hooks(self) -> None:
         for brick in self._security_bricks:
@@ -169,53 +182,28 @@ class EventLoop:
             for hook_type, cb_list in callbacks.items():
                 for cb in cb_list:
                     self._hooks.register(hook_type, cb)
-            logger.info(
-                "Registered security brick: %s (%d callback(s))",
-                brick.name,
-                sum(len(v) for v in callbacks.values()),
-            )
-
-    async def _memory_post_llm(self, brick: MemoryBrick, data: Any) -> None:
-        """Handle POST_LLM hook for memory bricks.
-
-        Stores the assistant's response in LCM and checks if compaction
-        is needed based on budget thresholds.
-        """
-        session_id = await self._state.get("session_id", "default")
-        if isinstance(data, dict):
-            content = data.get("content", "")
-            await brick.intercept_message(session_id, "assistant", content)
-        return None
+            logger.info("Registered security brick hooks: %s", brick.name)
 
     # ------------------------------------------------------------------
     # Phase 2 — Single Turn
     # ------------------------------------------------------------------
 
     async def _turn(self) -> None:
-        """Execute one full input→output turn."""
-        # --- Input ---
+        """Capture one user input and drive the agent loop to completion."""
         user_text = await self._capture_input()
         if not user_text:
             return
 
-        # Check for special commands
-        cmd = user_text.strip().lower()
-        if cmd == "/exit" or cmd == "/quit":
-            raise KeyboardInterrupt
-        if cmd == "/afk" and self._afk_manager is not None:
-            await self._enter_afk_mode()
+        if await self._handle_command(user_text):
             return
 
-        # Create user message and append to history
         user_msg = Message(role="user", content=user_text)
         self._message_history.append(user_msg)
 
-        # Render user message in TUI
         for iface in self._registry.get_all(InterfaceBrick):
             if hasattr(iface, "render_user_message"):
                 await iface.render_user_message(user_text)
 
-        # Dispatch hooks
         await self._hooks.dispatch(HookType.PRE_PARSE, HookEvent(
             hook_type=HookType.PRE_PARSE,
             data=user_msg,
@@ -227,48 +215,139 @@ class EventLoop:
             brick_name="event_loop",
         ))
 
-        # --- Memory Context Injection ---
-        memory_messages = await self._build_memory_context()
+        await self._agent_loop()
 
-        # --- LLM Completion ---
+    async def _handle_command(self, user_text: str) -> bool:
+        """Process slash commands. Returns True if the input was a command."""
+        cmd = user_text.strip().lower()
+        if cmd in ("/exit", "/quit"):
+            raise KeyboardInterrupt
+        if cmd == "/help":
+            await self._emit_info("commands", _HELP_TEXT)
+            return True
+        if cmd == "/bricks":
+            lines = []
+            for brick in self._registry._bricks.values():
+                brk = getattr(brick, "BRICK_NUMBER", "BRK-???")
+                lines.append(f"{brk}  {brick.name}  ({type(brick).__name__})")
+            await self._emit_info("seated bricks", "\n".join(lines) or "none")
+            return True
+        if cmd == "/clear":
+            self._message_history.clear()
+            for iface in self._registry.get_all(InterfaceBrick):
+                if hasattr(iface, "clear_screen"):
+                    iface.clear_screen()
+            return True
+        if cmd == "/afk":
+            if self._afk_manager is None:
+                await self._emit_info(
+                    "afk",
+                    "AFK mode is not available: no AFK manager is wired.\n"
+                    "Load a build set with soul bricks and the internal event bus.",
+                )
+            else:
+                await self._enter_afk_mode()
+            return True
+        return False
+
+    # ------------------------------------------------------------------
+    # Agent loop — provider ⇄ tools until a text answer
+    # ------------------------------------------------------------------
+
+    async def _agent_loop(self) -> None:
+        """Iterate provider calls and tool executions until the model answers."""
         tool_schemas = self._collect_tool_schemas()
-        content, raw_calls = await self._call_providers(tool_schemas, messages=memory_messages)
 
-        # Debug: show raw response in TUI
-        debug_info = f"[model: {len(raw_calls)} tool calls | response: {len(content)} chars]"
+        for _step in range(MAX_AGENT_STEPS):
+            messages = await self._build_provider_messages()
+
+            self._set_busy(True, "thinking…")
+            try:
+                content, raw_calls, meta = await self._call_providers(tool_schemas, messages)
+            finally:
+                self._set_busy(False)
+
+            self._track_usage(meta)
+
+            reasoning = meta.get("reasoning", "")
+            if reasoning:
+                await self._emit_thinking(reasoning)
+
+            await self._hooks.dispatch(HookType.POST_LLM, HookEvent(
+                hook_type=HookType.POST_LLM,
+                data={"content": content, "tool_calls": raw_calls},
+                brick_name="event_loop",
+            ))
+
+            if not raw_calls:
+                if not content:
+                    content = "[the model returned an empty response]"
+                self._message_history.append(Message(role="assistant", content=content))
+                await self._emit_assistant(content)
+                return
+
+            # Model wants tools: record its message, run them, loop again.
+            self._message_history.append(
+                Message(role="assistant", content=content, tool_calls=raw_calls)
+            )
+            if content:
+                await self._emit_assistant(content)
+            await self._execute_tool_round(raw_calls)
+
+        msg = f"Stopped after {MAX_AGENT_STEPS} tool steps without a final answer."
+        self._message_history.append(Message(role="assistant", content=msg))
+        await self._emit_assistant(msg)
+
+    async def _execute_tool_round(self, raw_calls: List[Dict[str, Any]]) -> None:
+        """Run one batch of tool calls through hooks and Tool Bricks."""
+        tool_calls = self._raw_to_tool_calls(raw_calls)
+
         for iface in self._registry.get_all(InterfaceBrick):
-            if hasattr(iface, "render_assistant_response"):
-                await iface.render_assistant_response(debug_info)
+            if hasattr(iface, "render_tool_calls"):
+                await iface.render_tool_calls(raw_calls)
 
-        await self._hooks.dispatch(HookType.POST_LLM, HookEvent(
-            hook_type=HookType.POST_LLM,
-            data={"content": content, "tool_calls": raw_calls},
+        await self._hooks.dispatch(HookType.PRE_TOOL, HookEvent(
+            hook_type=HookType.PRE_TOOL,
+            data=tool_calls,
             brick_name="event_loop",
         ))
 
-        # --- Tool Execution (if any) ---
-        if raw_calls:
-            await self._handle_tools(raw_calls)
-            return
+        tool_calls = await self.process_tool_calls(tool_calls)
 
-        # No tools — reset tool loop counter and render
-        self._consecutive_tool_loops = 0
-        self._message_history.append(Message(role="assistant", content=content))
-        for iface in self._registry.get_all(InterfaceBrick):
-            if hasattr(iface, "render_assistant_response"):
-                await iface.render_assistant_response(content)
-        render_content = content if content else "[empty response]"
-        await self._render_output(render_content)
+        await self._hooks.dispatch(HookType.POST_TOOL, HookEvent(
+            hook_type=HookType.POST_TOOL,
+            data=tool_calls,
+            brick_name="event_loop",
+        ))
+
+        for tc in tool_calls:
+            if tc.result and tc.name:
+                for iface in self._registry.get_all(InterfaceBrick):
+                    if hasattr(iface, "render_tool_result"):
+                        await iface.render_tool_result(tc.name, tc.args, tc.result)
+
+        for tc in tool_calls:
+            self._message_history.append(Message(
+                role="tool",
+                content=str(tc.result) if tc.result else "null",
+                tool_call_id=tc.tool_call_id or tc.name,
+            ))
+
+        await self._hooks.dispatch(HookType.POST_TOOL_CALL, HookEvent(
+            hook_type=HookType.POST_TOOL_CALL,
+            data=tool_calls,
+            brick_name="event_loop",
+        ))
+
+    # ------------------------------------------------------------------
+    # AFK mode
+    # ------------------------------------------------------------------
 
     async def _enter_afk_mode(self) -> None:
         """Enter autonomous AFK mode: swap interfaces, start protocol engine."""
-        from brikie.kernel.afk_manager import AFKManager
         from brikie.kernel.afk_protocol import AFKProtocolEngine
 
-        if self._afk_manager is None:
-            return
-
-        await self._render_output("\n[AFK mode] Entering autonomous loop...")
+        await self._emit_info("afk", "Entering autonomous loop…")
 
         souls = [self._registry.get(name) for name in ("dreamer", "sisyphus_orchestrator")
                  if name in self._registry._bricks]
@@ -289,153 +368,68 @@ class EventLoop:
             pass
 
         await self._afk_manager.exit_afk_mode()
-        await self._render_output("\n[AFK mode] Completed — returned to interactive.")
 
-        # Summarize what happened
-        results = engine.results
-        if results:
-            last = results[-1]
-            await self._render_output(
-                f"[AFK mode] {last.proposals_count} proposals, "
-                f"{last.executed_count} executed, "
-                f"{last.failed_count} failed."
+        summary = "Completed — returned to interactive."
+        if engine.results:
+            last = engine.results[-1]
+            summary += (
+                f"\n{last.proposals_count} proposals, "
+                f"{last.executed_count} executed, {last.failed_count} failed."
             )
-
-    async def _build_memory_context(self) -> List[Dict[str, Any]]:
-        """Build the base message list with memory context injected."""
-        messages = self._messages_to_dicts()
-        memory_bricks = self._registry.get_all(MemoryBrick)
-        if not memory_bricks:
-            return messages
-
-        session_id = await self._state.get("session_id", "default")
-        context_parts: List[str] = []
-        for brick in memory_bricks:
-            ctx = await brick.build_context(session_id)
-            if ctx:
-                summaries = ctx.get("summaries", [])
-                tail = ctx.get("tail", [])
-                if summaries:
-                    context_parts.append("## Session Summary")
-                    for s in summaries:
-                        context_parts.append(f"[DAG depth={s.get('depth',0)}] {s.get('content','')}")
-                if tail:
-                    context_parts.append("## Recent Messages")
-                    for t in tail:
-                        context_parts.append(f"[{t.get('role','?')}] {t.get('content','')[:200]}")
-
-        if context_parts:
-            memory_blob = "\n\n".join(context_parts)
-            system_msg = {
-                "role": "system",
-                "content": f"## Memory Context\n{memory_blob}",
-            }
-            return [system_msg] + messages
-        return messages
+        await self._emit_info("afk", summary)
 
     async def _on_afk_execute(self, title: str, payload: Dict[str, Any]) -> bool:
         """Execute an approved AFK proposal using available tool bricks."""
         logger.info("AFK executing: %s", title)
         return True
 
-    async def _handle_tools(
-        self,
-        raw_calls: List[Dict[str, Any]],
-        depth: int = 0,
-    ) -> None:
-        """Process tool calls, then get the LLM to continue."""
-        if depth > 10:
-            self._consecutive_tool_loops += 1
-            logger.warning(
-                "Tool-call depth limit reached (10). Consecutive loops: %d/%d",
-                self._consecutive_tool_loops, self.MAX_CONSECUTIVE_TOOL_LOOPS,
-            )
-            if self._consecutive_tool_loops >= self.MAX_CONSECUTIVE_TOOL_LOOPS:
-                msg = (
-                    "Persistent tool loop detected — breaking out. "
-                    "Please try a different approach or clarify your request."
-                )
-                self._message_history.append(
-                    Message(role="assistant", content=msg)
-                )
-                await self._render_output(msg)
-                self._consecutive_tool_loops = 0
-                return
+    # ------------------------------------------------------------------
+    # Context assembly
+    # ------------------------------------------------------------------
 
-            self._message_history.append(
-                Message(role="assistant", content="Tool-call loop detected — retrying.")
-            )
-            await self._render_output("Tool-call loop detected — retrying.")
-            return
+    async def _build_provider_messages(self) -> List[Dict[str, Any]]:
+        """Assemble system prompt + memory context + conversation history."""
+        messages: List[Dict[str, Any]] = []
+        if self._system_prompt:
+            messages.append({"role": "system", "content": self._system_prompt})
 
-        # Store the assistant message with tool calls in history
-        assistant_msg = Message(
-            role="assistant",
-            content="",
-            tool_calls=raw_calls,
-        )
-        self._message_history.append(assistant_msg)
+        memory_blob = await self._build_memory_blob()
+        if memory_blob:
+            messages.append({
+                "role": "system",
+                "content": f"## Memory Context\n{memory_blob}",
+            })
 
-        # Convert raw tool-call dicts to ToolCall objects, preserving call IDs
-        tool_calls = self._raw_to_tool_calls(raw_calls)
+        messages.extend(self._messages_to_dicts())
+        return messages
 
-        # Render tool calls in TUI before execution
-        for iface in self._registry.get_all(InterfaceBrick):
-            if hasattr(iface, "render_tool_calls"):
-                await iface.render_tool_calls(raw_calls)
+    async def _build_memory_blob(self) -> str:
+        """Collect compressed context from Memory Bricks, if any."""
+        memory_bricks = self._registry.get_all(MemoryBrick)
+        if not memory_bricks:
+            return ""
 
-        # PRE_TOOL
-        await self._hooks.dispatch(HookType.PRE_TOOL, HookEvent(
-            hook_type=HookType.PRE_TOOL,
-            data=tool_calls,
-            brick_name="event_loop",
-        ))
-
-        # Execute tools
-        tool_calls = await self.process_tool_calls(tool_calls)
-
-        # POST_TOOL
-        await self._hooks.dispatch(HookType.POST_TOOL, HookEvent(
-            hook_type=HookType.POST_TOOL,
-            data=tool_calls,
-            brick_name="event_loop",
-        ))
-
-        # Render tool results in TUI
-        for tc in tool_calls:
-            if tc.result and tc.name:
-                for iface in self._registry.get_all(InterfaceBrick):
-                    if hasattr(iface, "render_tool_result"):
-                        await iface.render_tool_result(tc.name, tc.args, tc.result)
-
-        # Store tool results — use the actual call ID from the LLM response
-        for tc in tool_calls:
-            self._message_history.append(Message(
-                role="tool",
-                content=str(tc.result) if tc.result else "null",
-                tool_call_id=tc.tool_call_id or tc.name,
-            ))
-
-        # POST_TOOL_CALL
-        await self._hooks.dispatch(HookType.POST_TOOL_CALL, HookEvent(
-            hook_type=HookType.POST_TOOL_CALL,
-            data=tool_calls,
-            brick_name="event_loop",
-        ))
-
-        # Continue: LLM processes tool results
-        memory_messages = await self._build_memory_context()
-        content, more_raw = await self._call_providers(self._collect_tool_schemas(), messages=memory_messages)
-
-        if more_raw:
-            await self._handle_tools(more_raw, depth + 1)
-            return
-
-        self._message_history.append(Message(role="assistant", content=content))
-        for iface in self._registry.get_all(InterfaceBrick):
-            if hasattr(iface, "render_assistant_response"):
-                await iface.render_assistant_response(content)
-        await self._render_output(content)
+        session_id = await self._state.get("session_id", "default")
+        context_parts: List[str] = []
+        for brick in memory_bricks:
+            ctx = await brick.build_context(session_id)
+            if not ctx:
+                continue
+            summaries = ctx.get("summaries", [])
+            tail = ctx.get("tail", [])
+            if summaries:
+                context_parts.append("## Session Summary")
+                for s in summaries:
+                    context_parts.append(
+                        f"[DAG depth={s.get('depth', 0)}] {s.get('content', '')}"
+                    )
+            if tail:
+                context_parts.append("## Recent Messages")
+                for t in tail:
+                    context_parts.append(
+                        f"[{t.get('role', '?')}] {t.get('content', '')[:200]}"
+                    )
+        return "\n\n".join(context_parts)
 
     # ------------------------------------------------------------------
     # Tool Execution
@@ -448,20 +442,24 @@ class EventLoop:
             executed = False
             for tool_brick in tools:
                 tool_list = getattr(tool_brick, "tools", None)
-                if tool_list is not None:
-                    if any(
-                        s.get("function", {}).get("name") == tc.name
-                        for s in tool_list
-                    ):
-                        logger.info("Executing tool %s via brick %s", tc.name, tool_brick.name)
-                        try:
-                            result = await tool_brick.execute(tc.name, tc.args)
-                            tc.result = str(result)
-                            executed = True
-                            break
-                        except (KeyError, ValueError) as exc:
-                            logger.warning("Tool %s execute failed on %s: %s", tc.name, tool_brick.name, exc)
-                            continue
+                if tool_list is None:
+                    continue
+                if any(
+                    s.get("function", {}).get("name") == tc.name
+                    for s in tool_list
+                ):
+                    logger.info("Executing tool %s via brick %s", tc.name, tool_brick.name)
+                    try:
+                        result = await tool_brick.execute(tc.name, tc.args)
+                        tc.result = str(result)
+                        executed = True
+                        break
+                    except (KeyError, ValueError) as exc:
+                        logger.warning(
+                            "Tool %s execute failed on %s: %s",
+                            tc.name, tool_brick.name, exc,
+                        )
+                        continue
 
             if not executed:
                 tc.result = f"No ToolBrick found for tool '{tc.name}'"
@@ -470,15 +468,10 @@ class EventLoop:
         return tool_calls
 
     def _raw_to_tool_calls(self, raw: List[Dict[str, Any]]) -> List[ToolCall]:
-        """Convert raw provider tool-call dicts to ToolCall objects.
-
-        Preserves the OpenAI ``id`` field (e.g. ``call_abc123``) so tool
-        results can be matched back to the LLM's original tool call.
-        """
+        """Convert raw provider tool-call dicts to ToolCall objects."""
         result: List[ToolCall] = []
         for item in raw:
             call_id = item.get("id", "")
-            # OpenAI format: {"id": "call_xxx", "type": "function", "function": {...}}
             if "function" in item:
                 func = item["function"]
                 name = func.get("name", "")
@@ -488,7 +481,6 @@ class EventLoop:
                 except (json.JSONDecodeError, TypeError):
                     args = args_raw
                 result.append(ToolCall(name=name, args=args, tool_call_id=call_id))
-            # Generic format: {"name": ..., "args": ...}
             elif "name" in item:
                 result.append(ToolCall(
                     name=item["name"],
@@ -502,13 +494,7 @@ class EventLoop:
     # ------------------------------------------------------------------
 
     def _messages_to_dicts(self) -> List[Dict[str, Any]]:
-        """Serialize the message history to provider-compatible dicts.
-
-        Follows the OpenAI /chat/completions wire format:
-        - ``role: "assistant"`` with ``tool_calls`` includes a ``tool_calls`` array
-        - ``role: "tool"`` includes ``tool_call_id`` matching the call
-        - Other roles pass ``content`` and ``role`` verbatim
-        """
+        """Serialize history to OpenAI /chat/completions wire format."""
         result: List[Dict[str, Any]] = []
         for m in self._message_history:
             if m.role == "tool":
@@ -546,10 +532,9 @@ class EventLoop:
 
     def _collect_tool_schemas(self) -> List[Dict[str, Any]]:
         """Collect tool schemas from all Tool Bricks that expose them."""
-        tools = self._registry.get_all(ToolBrick)
         schemas: List[Dict[str, Any]] = []
-        for tool in tools:
-            if hasattr(tool, "tools") and tool.tools is not None:
+        for tool in self._registry.get_all(ToolBrick):
+            if getattr(tool, "tools", None):
                 schemas.extend(tool.tools)
         return schemas
 
@@ -560,33 +545,39 @@ class EventLoop:
     async def _call_providers(
         self,
         tool_schemas: List[Dict[str, Any]],
-        messages: List[Dict[str, Any]] | None = None,
-    ) -> tuple[str, List[Dict[str, Any]]]:
+        messages: List[Dict[str, Any]],
+    ) -> Tuple[str, List[Dict[str, Any]], Dict[str, Any]]:
         """Route messages to the first available Provider.
 
-        Args:
-            tool_schemas: Tool definitions to send to the LLM.
-            messages: Optional pre-built message list. If None, builds from history.
-
-        Returns (content, raw_tool_call_dicts).
+        Providers may return ``(content, tool_calls)`` or
+        ``(content, tool_calls, meta)`` — meta carries reasoning text,
+        token usage, and finish reason when available.
         """
-        providers = self._registry.get_all(ProviderBrick)
-        if messages is None:
-            messages = self._messages_to_dicts()
         errors: List[str] = []
-        for provider in providers:
+        for provider in self._registry.get_all(ProviderBrick):
             try:
-                return await provider.get_completion(messages, tool_schemas)
+                result = await provider.get_completion(messages, tool_schemas)
             except Exception as exc:
                 msg = f"{provider.name}: {exc}"
                 logger.error("Provider %s failed: %s", provider.name, exc)
                 errors.append(msg)
+                continue
+            if len(result) == 3:
+                return result
+            content, raw_calls = result
+            return content, raw_calls, {}
+
         if errors:
-            error_text = "All providers failed:\n" + "\n".join(errors)
-            logger.critical(error_text)
-            await self._render_output(f"[system error] {error_text}")
-            return "", []
-        return "", []
+            await self._emit_error("All providers failed:\n" + "\n".join(errors))
+        return "", [], {}
+
+    def _track_usage(self, meta: Dict[str, Any]) -> None:
+        usage = meta.get("usage") or {}
+        self._tokens_in += usage.get("prompt_tokens", 0)
+        self._tokens_out += usage.get("completion_tokens", 0)
+        for iface in self._registry.get_all(InterfaceBrick):
+            if hasattr(iface, "update_usage"):
+                iface.update_usage(self._tokens_in, self._tokens_out)
 
     # ------------------------------------------------------------------
     # Input / Output
@@ -594,15 +585,39 @@ class EventLoop:
 
     async def _capture_input(self) -> str:
         """Capture input from the first responsive Interface Brick."""
-        interfaces = self._registry.get_all(InterfaceBrick)
-        for iface in interfaces:
+        for iface in self._registry.get_all(InterfaceBrick):
             text = await iface.get_input()
             if text:
                 return text
         return ""
 
-    async def _render_output(self, content: str) -> None:
-        """Render output through every registered Interface Brick."""
-        interfaces = self._registry.get_all(InterfaceBrick)
-        for iface in interfaces:
-            await iface.output(content)
+    def _set_busy(self, busy: bool, label: str = "thinking…") -> None:
+        for iface in self._registry.get_all(InterfaceBrick):
+            if hasattr(iface, "set_busy"):
+                iface.set_busy(busy, label)
+
+    async def _emit_assistant(self, content: str) -> None:
+        for iface in self._registry.get_all(InterfaceBrick):
+            if hasattr(iface, "render_assistant_response"):
+                await iface.render_assistant_response(content)
+            else:
+                await iface.output(content)
+
+    async def _emit_thinking(self, reasoning: str) -> None:
+        for iface in self._registry.get_all(InterfaceBrick):
+            if hasattr(iface, "render_thinking"):
+                await iface.render_thinking(reasoning)
+
+    async def _emit_info(self, title: str, body: str) -> None:
+        for iface in self._registry.get_all(InterfaceBrick):
+            if hasattr(iface, "render_info"):
+                await iface.render_info(title, body)
+            else:
+                await iface.output(f"[{title}] {body}")
+
+    async def _emit_error(self, msg: str) -> None:
+        for iface in self._registry.get_all(InterfaceBrick):
+            if hasattr(iface, "render_error"):
+                await iface.render_error(msg)
+            else:
+                await iface.output(f"[system error] {msg}")

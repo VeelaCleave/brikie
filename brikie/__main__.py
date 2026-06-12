@@ -1,11 +1,12 @@
 """Brikie — Baseplate entry point.
 
-Boots the kernel, registers bricks, and runs the async event loop.
+Boots the kernel, loads a Build Set of bricks, and runs the async event
+loop.  No concrete brick is imported by name: the Build Set manifest
+decides exactly which bricks are seated and how they are configured.
 
-No concrete brick is imported by name.  Bricks are selected by:
-1. CLI args (--provider, --interface, --tool)
-2. Environment variables (BRIKIE_PROVIDER, BRIKIE_INTERFACE, BRIKIE_TOOL)
-3. Default fallback (imported dynamically from known subpackages)
+Optional CLI flags (--model, --base-url, --api-key) override the
+provider configuration from the Build Set; there are no provider
+defaults baked into the kernel.
 """
 
 import argparse
@@ -14,9 +15,10 @@ import logging
 import sys
 from pathlib import Path
 
+from brikie.config.default_soul import DEFAULT_SYSTEM_PROMPT
 from brikie.kernel.event_loop import EventLoop
 from brikie.kernel.hooks import HookDispatcher
-from brikie.kernel.registry import BrickRegistry
+from brikie.kernel.registry import BrickRegistry, ProviderBrick
 from brikie.kernel.state import StateManager
 
 logger = logging.getLogger(__name__)
@@ -33,42 +35,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--set",
         default="default",
-        help="Build Set name (e.g. minimal, default, afk).  Default: default.",
+        help="Build Set name (e.g. minimal, local, default, afk) or a path "
+             "to a Build Set JSON.  Default: default.",
     )
     parser.add_argument(
         "--model",
-        default="gpt-4o",
-        help="LLM model name (default: gpt-4o)",
+        default=None,
+        help="Override the provider model from the Build Set",
     )
     parser.add_argument(
         "--api-key",
-        default="",
-        help="API key for the provider",
+        default=None,
+        help="Override the provider API key from the Build Set",
     )
     parser.add_argument(
         "--base-url",
-        default="https://api.openai.com/v1",
-        help="Base URL for the provider (default: OpenAI)",
+        default=None,
+        help="Override the provider base URL from the Build Set",
     )
     return parser.parse_args(argv)
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-
 async def main() -> None:
-    """Bootstrap the Baseplate kernel and run the event loop.
-
-    Bricks are loaded from a Build Set manifest.  The set specifies
-    exactly which bricks to register and their configuration.
-    """
+    """Bootstrap the Baseplate kernel and run the event loop."""
     args = parse_args()
 
     registry = BrickRegistry()
@@ -82,63 +71,41 @@ async def main() -> None:
         set_path = str(_BUILD_SETS_DIR / f"{set_path}.json")
 
     loader = BuildLoader(registry)
-
     try:
-        build = loader.load(set_path)
+        loader.load(set_path)
     except BuildSetError as exc:
         print(f"[brikie] Error loading Build Set: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    # Apply CLI overrides to all provider bricks
-    from brikie.kernel.registry import ProviderBrick
-    has_overrides = args.model != "gpt-4o" or args.base_url != "https://api.openai.com/v1" or bool(args.api_key)
-    for brick in registry.get_all(ProviderBrick):
-        if not has_overrides:
-            break
-        if args.model:
-            brick._model = args.model
-        if args.base_url:
-            brick._base_url = args.base_url
-            if hasattr(brick, "_client") and brick._client is not None:
-                brick._client.base_url = args.base_url
-        if args.api_key:
-            brick._api_key = args.api_key
+    # CLI flags override provider configuration before init().
+    if args.model or args.base_url or args.api_key:
+        for brick in registry.get_all(ProviderBrick):
+            if hasattr(brick, "configure"):
+                brick.configure(
+                    model=args.model,
+                    base_url=args.base_url,
+                    api_key=args.api_key,
+                )
 
     loop = EventLoop(
         registry=registry,
         state=state,
         hooks=hooks,
+        system_prompt=DEFAULT_SYSTEM_PROMPT,
     )
-
-    # Pass provider info and brick count to CLI
-    from brikie.kernel.registry import ProviderBrick as ProviderBrickABC
-    for b in registry._bricks.values():
-        if hasattr(b, "set_provider_info"):
-            for p in registry.get_all(ProviderBrickABC):
-                if hasattr(p, "_model"):
-                    b.set_provider_info(getattr(p, "_model", "unknown"), type(p).__name__)
-            if hasattr(b, "set_brick_count"):
-                b.set_brick_count(len(registry._bricks))
-            break
-
-    # Pre-read piped stdin for non-TTY mode and inject into CLI brick
-    if not sys.stdin.isatty():
-        stdin_lines = [line.rstrip("\n\r") for line in sys.stdin.readlines()]
-        if stdin_lines:
-            from brikie.bricks.interface.cli import CLIBrick
-            for b in registry._bricks.values():
-                if isinstance(b, CLIBrick) and b._tui is not None:
-                    b._tui._stdin_lines = stdin_lines
 
     try:
         await loop.run()
     except (KeyboardInterrupt, EOFError):
-        print("\n[brikie] Shutting down...")
+        pass
 
 
 def entry_point() -> None:
     """Synchronous entry point for ``brikie`` CLI command."""
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":

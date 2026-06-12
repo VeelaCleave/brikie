@@ -3,7 +3,6 @@
 Supports both OpenAI and Claude API formats out of the box.
 """
 
-import json
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -47,6 +46,20 @@ class HTTPProvider(ProviderBrick):
     def name(self) -> str:
         return self._name
 
+    def configure(
+        self,
+        model: Optional[str] = None,
+        base_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+    ) -> None:
+        """Override connection settings before ``init()`` is called."""
+        if model:
+            self._model = model
+        if base_url:
+            self._base_url = base_url.rstrip("/")
+        if api_key:
+            self._api_key = api_key
+
     async def init(self) -> None:
         """Initialize the async HTTP client."""
         if self._api_format == self.FORMAT_CLAUDE:
@@ -85,8 +98,12 @@ class HTTPProvider(ProviderBrick):
         self,
         messages: List[Dict[str, Any]],
         tools: List[Dict[str, Any]],
-    ) -> tuple[str, List[Dict[str, Any]]]:
-        """Send a completion request and return (content, tool_calls).
+    ) -> tuple[str, List[Dict[str, Any]], Dict[str, Any]]:
+        """Send a completion request and return (content, tool_calls, meta).
+
+        ``meta`` carries side-channel data the kernel can render or log:
+        ``reasoning`` (model thinking, if the API exposes it), ``usage``
+        (token counts), and ``finish_reason``.
 
         Dispatches to the correct API format handler based on `api_format`.
         """
@@ -105,7 +122,7 @@ class HTTPProvider(ProviderBrick):
         self,
         messages: List[Dict[str, Any]],
         tools: List[Dict[str, Any]],
-    ) -> tuple[str, List[Dict[str, Any]]]:
+    ) -> tuple[str, List[Dict[str, Any]], Dict[str, Any]]:
         """Handle OpenAI-format /chat/completions endpoint."""
         payload: Dict[str, Any] = {
             "model": self._model,
@@ -121,32 +138,27 @@ class HTTPProvider(ProviderBrick):
         choice = data["choices"][0]
         message = choice["message"]
 
-        # Extract content — handle null, empty, and reasoning fields
         content = message.get("content", "") or ""
         reasoning = message.get("reasoning") or message.get("reasoning_content") or ""
         refusal = message.get("refusal") or ""
-
-        # If content is empty but reasoning exists, include it
-        if not content and reasoning:
-            content = f"[Reasoning]\n{reasoning}"
-        elif not content and refusal:
+        if not content and refusal:
             content = f"[Refused] {refusal}"
-        elif not content:
-            finish = choice.get("finish_reason", "unknown")
-            content = f"[No content — finish_reason: {finish}]"
 
-        raw_calls: List[Dict[str, Any]] = []
-        for tc in message.get("tool_calls") or []:
-            raw_calls.append(tc)
+        raw_calls: List[Dict[str, Any]] = list(message.get("tool_calls") or [])
 
-        # Log full response for debug
+        meta = {
+            "reasoning": reasoning,
+            "usage": data.get("usage") or {},
+            "finish_reason": choice.get("finish_reason", ""),
+        }
+
         logger.debug(
             "OpenAI response: content=%s finish=%s calls=%d usage=%s",
-            repr(content)[:200], choice.get("finish_reason"),
-            len(raw_calls), data.get("usage"),
+            repr(content)[:200], meta["finish_reason"],
+            len(raw_calls), meta["usage"],
         )
 
-        return content, raw_calls
+        return content, raw_calls, meta
 
     # ------------------------------------------------------------------
     # Claude API
@@ -156,7 +168,7 @@ class HTTPProvider(ProviderBrick):
         self,
         messages: List[Dict[str, Any]],
         tools: List[Dict[str, Any]],
-    ) -> tuple[str, List[Dict[str, Any]]]:
+    ) -> tuple[str, List[Dict[str, Any]], Dict[str, Any]]:
         """Handle Anthropic-format /v1/messages endpoint."""
         payload: Dict[str, Any] = {
             "model": self._model,
@@ -171,15 +183,29 @@ class HTTPProvider(ProviderBrick):
         data = response.json()
 
         content = ""
+        reasoning = ""
         raw_calls: List[Dict[str, Any]] = []
 
         for block in data.get("content") or []:
             if block.get("type") == "text":
                 content += block.get("text", "")
+            elif block.get("type") == "thinking":
+                reasoning += block.get("thinking", "")
             elif block.get("type") == "tool_use":
                 raw_calls.append(block)
 
-        return content, raw_calls
+        usage = data.get("usage") or {}
+        meta = {
+            "reasoning": reasoning,
+            # Normalize Anthropic usage keys to the OpenAI names the kernel reads.
+            "usage": {
+                "prompt_tokens": usage.get("input_tokens", 0),
+                "completion_tokens": usage.get("output_tokens", 0),
+            },
+            "finish_reason": data.get("stop_reason", ""),
+        }
+
+        return content, raw_calls, meta
 
     @staticmethod
     def _convert_tools_for_claude(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
