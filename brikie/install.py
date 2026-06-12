@@ -70,6 +70,7 @@ CATALOG: Dict[str, List[CatalogEntry]] = {
         CatalogEntry("BRK-430", "GitHub", "Read repo issues; feeds the Dreamer triaged community requests", dev=True),
         CatalogEntry("BRK-440", "MCP Client", "Connect any Model Context Protocol server\u2019s tools to your agent"),
         CatalogEntry("BRK-450", "Registry Installer", "Fetch and install bricks from the central registry"),
+        CatalogEntry("BRK-460", "Goals", "Long-running goals that persist across sessions (/goal)"),
     ],
     "Memory Bricks": [
         CatalogEntry("BRK-600", "Lossless Context (LCM)", "SQLite immutable store + DAG compaction"),

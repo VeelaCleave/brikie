@@ -60,6 +60,7 @@ brikie = [
     "bricks/memory/lcm/schema.sql",
     "bricks/memory/mempalace/schema.sql",
     "bricks/memory/wiki/schema.sql",
+    "bricks/tool/goals/schema.sql",
 ]
 
 [tool.pytest.ini_options]

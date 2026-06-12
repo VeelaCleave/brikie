@@ -40,6 +40,7 @@ BRICK_INDEX: Dict[str, str] = {
     "BRK-430": "brikie.bricks.tool.github_tools.GitHubBrick",
     "BRK-440": "brikie.bricks.tool.mcp_client.MCPClientBrick",
     "BRK-450": "brikie.bricks.registry.installer.RegistryInstallerBrick",
+    "BRK-460": "brikie.bricks.tool.goals.goal_brick.GoalBrick",
 
     # ── Soul Bricks (500-599) ─────────────────────────────────────────
     "BRK-500": "brikie.bricks.soul.foreman.Foreman",
