@@ -211,3 +211,28 @@ class TestWriteDefaultSet:
                                               "api_key": "k"})
         data = json.loads((tmp_path / "default.json").read_text())
         assert data["bricks"][0]["brk"] == "BRK-200"
+
+
+class TestEnvRefWithFallback:
+    def test_fallback_used_when_var_unset(self, monkeypatch):
+        monkeypatch.delenv("TEST_BASE_OVERRIDE", raising=False)
+        assert HTTPProvider._resolve_ref(
+            "env:TEST_BASE_OVERRIDE|https://api.example.com"
+        ) == "https://api.example.com"
+
+    def test_env_wins_when_set(self, monkeypatch):
+        monkeypatch.setenv("TEST_BASE_OVERRIDE", "http://reroute:9999/v1")
+        assert HTTPProvider._resolve_ref(
+            "env:TEST_BASE_OVERRIDE|https://api.example.com"
+        ) == "http://reroute:9999/v1"
+
+    async def test_base_url_resolved_at_init(self, monkeypatch):
+        monkeypatch.setenv("TEST_BASE_OVERRIDE", "http://managed:1234/v1")
+        provider = HTTPProvider(
+            base_url="env:TEST_BASE_OVERRIDE|https://api.example.com"
+        )
+        await provider.init()
+        try:
+            assert provider.base_url == "http://managed:1234/v1"
+        finally:
+            await provider.shutdown()

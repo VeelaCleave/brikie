@@ -58,6 +58,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Rerun the first-run provider setup wizard",
     )
+    parser.add_argument(
+        "--preset",
+        default=None,
+        metavar="NAME",
+        help="Apply a provider preset (anthropic, openai, openrouter, "
+             "groq, ollama, lmstudio, vllm) over the Build Set — ideal "
+             "for sandboxed/scripted runs where env vars carry the keys",
+    )
     return parser.parse_args(argv)
 
 
@@ -88,9 +96,26 @@ async def main() -> None:
         sys.exit(1)
 
     # CLI flags override provider configuration before init().
-    if args.model or args.base_url or args.api_key:
+    # --preset applies a full named recipe; --model/--base-url/--api-key
+    # refine on top of it.
+    preset_overrides = {}
+    if args.preset:
+        from brikie.config.provider_presets import PRESETS, preset_config
+
+        preset = PRESETS.get(args.preset)
+        if preset is None:
+            print(
+                f"[brikie] Unknown preset '{args.preset}' — choose from: "
+                f"{', '.join(PRESETS)}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        preset_overrides = preset_config(preset)
+
+    if preset_overrides or args.model or args.base_url or args.api_key:
         for brick in registry.get_all(ProviderBrick):
             if hasattr(brick, "configure"):
+                brick.configure(**preset_overrides)
                 brick.configure(
                     model=args.model,
                     base_url=args.base_url,

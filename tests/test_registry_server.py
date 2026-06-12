@@ -134,7 +134,11 @@ class TestBuildSetGeneration:
         build = generate_buildset(["BRK-300", "BRK-200@anthropic"], "mini")
         provider = build["bricks"][1]
         assert provider["brk"] == "BRK-200"
-        assert provider["config"]["base_url"] == "https://api.anthropic.com"
+        # base_url is an env-ref with fallback so managed runtimes
+        # (OpenShell) can reroute inference by exporting the variable
+        assert provider["config"]["base_url"] == (
+            "env:ANTHROPIC_BASE_URL|https://api.anthropic.com"
+        )
         assert provider["config"]["api_format"] == "claude"
         # keys are env references, never literals
         assert provider["config"]["api_key"] == "env:ANTHROPIC_API_KEY"
@@ -483,3 +487,54 @@ class TestDevBricks:
         # hidden on the page ≠ forbidden in the generator
         build = generate_buildset(["BRK-300", "BRK-200", "BRK-430"], "x")
         assert any(b["brk"] == "BRK-430" for b in build["bricks"])
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Isolated (Docker) install mode
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestDockerInstallMode:
+    def _build(self, *extra):
+        return generate_buildset(["BRK-300", "BRK-200@anthropic", *extra], "jail")
+
+    def test_docker_script_shape(self):
+        script = generate_install_sh(self._build(), mode="docker")
+        assert script.startswith("#!/usr/bin/env sh")
+        assert "ghcr.io/veelacleave/brikie" in script
+        assert '-v "$PWD":/workspace' in script
+        assert "--set /buildset.json" in script
+
+    def test_env_names_forwarded_but_never_values(self):
+        script = generate_install_sh(self._build(), mode="docker")
+        assert "-e ANTHROPIC_API_KEY" in script
+        assert "-e ANTHROPIC_BASE_URL" in script
+        assert "sk-" not in script
+
+    def test_host_network_only_for_local_providers(self):
+        hosted = generate_install_sh(self._build(), mode="docker")
+        assert "--network host" not in hosted
+        local = generate_install_sh(
+            generate_buildset(["BRK-300", "BRK-200@ollama"], "jail"),
+            mode="docker",
+        )
+        assert "--network host" in local
+
+    def test_unknown_mode_rejected(self):
+        with pytest.raises(GenerationError, match="mode"):
+            generate_install_sh(self._build(), mode="banana")
+
+    async def test_mode_param_over_http(self, server):
+        root = server.url.removesuffix("/bricks")
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{root}/install.sh?bricks=BRK-300,BRK-200&name=x&mode=docker"
+            )
+        assert resp.status_code == 200
+        assert "docker run" in resp.text
+
+    def test_page_has_isolated_toggle(self):
+        from brikie.server.website import render_index_html
+        page = render_index_html([])
+        assert 'id="isolated"' in page
+        assert "run isolated (Docker)" in page

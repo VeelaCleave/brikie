@@ -111,7 +111,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(buildset)
         elif segments == ["install.sh"]:
             buildset = self._buildset_from_query(query)
-            script = generate_install_sh(buildset)
+            mode = query.get("mode", ["pip"])[0]
+            script = generate_install_sh(buildset, mode=mode)
             self._send_body(script.encode("utf-8"), "text/x-shellscript; charset=utf-8")
         elif segments == ["bricks", "index.json"]:
             self._send_json([self._absolutize(m) for m in store.list_manifests()])

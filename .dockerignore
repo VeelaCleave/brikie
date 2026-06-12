@@ -1,0 +1,15 @@
+.git
+__pycache__
+*.pyc
+.venv
+venv
+dist
+build
+*.egg-info
+*.db
+*.db.bak*
+tests
+docs
+handover-prompt.md
+design.md
+.omo

@@ -63,6 +63,25 @@ brikie --set custom
 | 800 | Security | command firewall, sandbox |
 | 900 | Improvement | auto-fixer |
 
+## Don't want an agent on bare metal?
+
+Run it jailed. The official image confines the agent's shell and file
+tools to whatever directory you launch it from — the rest of your
+machine doesn't exist as far as it's concerned:
+
+```sh
+docker run -it --rm \
+  -v "$PWD":/workspace \
+  -e ANTHROPIC_API_KEY \
+  ghcr.io/veelacleave/brikie --preset anthropic
+```
+
+Or tick **"run isolated (Docker)"** on [brikie.co](https://brikie.co)
+and the generated installer does it all for you. brikie also runs
+inside [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell) for
+managed credentials and policy-controlled networking — see
+[examples/openshell](examples/openshell/README.md).
+
 ## Running your own registry
 
 The brikie.co server is stdlib-only:

@@ -47,6 +47,7 @@ class ProviderPreset:
     key_env: Optional[str]
     probe_url: Optional[str]
     blurb: str
+    base_url_env: Optional[str] = None  # runtime base-URL override env var
 
 
 PRESETS: dict[str, ProviderPreset] = {
@@ -57,6 +58,7 @@ PRESETS: dict[str, ProviderPreset] = {
             api_format="claude", default_model="claude-sonnet-4-6",
             key_env="ANTHROPIC_API_KEY", probe_url=None,
             blurb="Claude models — needs an Anthropic API key",
+            base_url_env="ANTHROPIC_BASE_URL",
         ),
         ProviderPreset(
             name="openai", label="OpenAI",
@@ -64,6 +66,7 @@ PRESETS: dict[str, ProviderPreset] = {
             api_format="openai", default_model="gpt-4o",
             key_env="OPENAI_API_KEY", probe_url=None,
             blurb="GPT models — needs an OpenAI API key",
+            base_url_env="OPENAI_BASE_URL",
         ),
         ProviderPreset(
             name="openrouter", label="OpenRouter",
@@ -115,9 +118,14 @@ def preset_config(preset: ProviderPreset, model: str | None = None) -> dict[str,
         preset: The provider preset.
         model: Optional model override; falls back to the preset default.
     """
+    base_url = preset.base_url
+    if preset.base_url_env:
+        # Resolved by HTTPProvider at init() — sandboxed/managed runtimes
+        # (e.g. OpenShell) reroute inference by setting this variable.
+        base_url = f"env:{preset.base_url_env}|{preset.base_url}"
     return {
         "model": model or preset.default_model,
-        "base_url": preset.base_url,
+        "base_url": base_url,
         "api_format": preset.api_format,
         "api_key": f"env:{preset.key_env}" if preset.key_env else "not-needed",
     }

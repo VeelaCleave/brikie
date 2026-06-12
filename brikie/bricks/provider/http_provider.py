@@ -73,6 +73,7 @@ class HTTPProvider(ProviderBrick):
         model: Optional[str] = None,
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
+        api_format: Optional[str] = None,
     ) -> None:
         """Override connection settings before ``init()`` is called."""
         if model:
@@ -81,24 +82,39 @@ class HTTPProvider(ProviderBrick):
             self._base_url = base_url.rstrip("/")
         if api_key:
             self._api_key = api_key
+        if api_format:
+            self._api_format = api_format
+
+    @staticmethod
+    def _resolve_ref(value: str) -> str:
+        """Resolve ``env:VAR`` and ``env:VAR|fallback`` references.
+
+        Plain values pass through untouched. ``env:VAR`` resolves to the
+        variable's value (empty when unset); ``env:VAR|fallback`` falls
+        back when the variable is unset — managed runtimes like
+        OpenShell reroute inference by exporting the variable.
+        """
+        if not value.startswith("env:"):
+            return value
+        ref = value[4:]
+        var, _, fallback = ref.partition("|")
+        return os.environ.get(var, "").strip() or fallback
 
     def _resolve_api_key(self) -> str:
         """Resolve an ``env:VAR`` API-key reference from the environment."""
-        if self._api_key.startswith("env:"):
-            var = self._api_key[4:]
-            value = os.environ.get(var, "").strip()
-            if not value:
-                logger.warning(
-                    "API key references $%s but it is not set — requests "
-                    "to %s will likely be rejected. Export it and restart, "
-                    "or rerun `python3 -m brikie.install`.",
-                    var, self._base_url,
-                )
-            return value
-        return self._api_key
+        resolved = self._resolve_ref(self._api_key)
+        if self._api_key.startswith("env:") and not resolved:
+            logger.warning(
+                "API key references $%s but it is not set — requests "
+                "to %s will likely be rejected. Export it and restart, "
+                "or rerun `python3 -m brikie.install`.",
+                self._api_key[4:].partition("|")[0], self._base_url,
+            )
+        return resolved
 
     async def init(self) -> None:
         """Initialize the async HTTP client."""
+        self._base_url = self._resolve_ref(self._base_url).rstrip("/")
         api_key = self._resolve_api_key()
         if self._api_format == self.FORMAT_CLAUDE:
             headers = {

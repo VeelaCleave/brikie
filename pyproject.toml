@@ -48,6 +48,17 @@ Repository = "https://github.com/VeelaCleave/brikie"
 [project.scripts]
 brikie = "brikie.__main__:entry_point"
 
+[tool.setuptools.package-data]
+# Explicit so installs without git metadata (Docker, sdists built from
+# tarballs) still ship the Build Sets, soul manifests, and DB schemas.
+brikie = [
+    "bricks/build/sets/*.json",
+    "bricks/soul/manifests/*.json",
+    "bricks/memory/lcm/schema.sql",
+    "bricks/memory/mempalace/schema.sql",
+    "bricks/memory/wiki/schema.sql",
+]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

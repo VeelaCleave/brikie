@@ -44,7 +44,7 @@ def should_onboard(args: argparse.Namespace) -> bool:
         return True
     if args.set != "default":
         return False
-    if args.model or args.base_url or args.api_key:
+    if args.model or args.base_url or args.api_key or getattr(args, "preset", None):
         return False
     if MARKER.exists():
         return False
