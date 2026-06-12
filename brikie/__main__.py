@@ -121,6 +121,15 @@ async def main() -> None:
                 b.set_brick_count(len(registry._bricks))
             break
 
+    # Pre-read piped stdin for non-TTY mode and inject into CLI brick
+    if not sys.stdin.isatty():
+        stdin_lines = [line.rstrip("\n\r") for line in sys.stdin.readlines()]
+        if stdin_lines:
+            from brikie.bricks.interface.cli import CLIBrick
+            for b in registry._bricks.values():
+                if isinstance(b, CLIBrick) and b._tui is not None:
+                    b._tui._stdin_lines = stdin_lines
+
     try:
         await loop.run()
     except (KeyboardInterrupt, EOFError):

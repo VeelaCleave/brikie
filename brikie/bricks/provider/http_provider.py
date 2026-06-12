@@ -118,12 +118,33 @@ class HTTPProvider(ProviderBrick):
         response.raise_for_status()
         data = response.json()
 
-        message = data["choices"][0]["message"]
+        choice = data["choices"][0]
+        message = choice["message"]
+
+        # Extract content — handle null, empty, and reasoning fields
         content = message.get("content", "") or ""
+        reasoning = message.get("reasoning") or message.get("reasoning_content") or ""
+        refusal = message.get("refusal") or ""
+
+        # If content is empty but reasoning exists, include it
+        if not content and reasoning:
+            content = f"[Reasoning]\n{reasoning}"
+        elif not content and refusal:
+            content = f"[Refused] {refusal}"
+        elif not content:
+            finish = choice.get("finish_reason", "unknown")
+            content = f"[No content — finish_reason: {finish}]"
 
         raw_calls: List[Dict[str, Any]] = []
         for tc in message.get("tool_calls") or []:
             raw_calls.append(tc)
+
+        # Log full response for debug
+        logger.debug(
+            "OpenAI response: content=%s finish=%s calls=%d usage=%s",
+            repr(content)[:200], choice.get("finish_reason"),
+            len(raw_calls), data.get("usage"),
+        )
 
         return content, raw_calls
 

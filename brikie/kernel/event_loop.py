@@ -198,8 +198,11 @@ class EventLoop:
         if not user_text:
             return
 
-        # Check for /afk command
-        if user_text.strip().lower() == "/afk" and self._afk_manager is not None:
+        # Check for special commands
+        cmd = user_text.strip().lower()
+        if cmd == "/exit" or cmd == "/quit":
+            raise KeyboardInterrupt
+        if cmd == "/afk" and self._afk_manager is not None:
             await self._enter_afk_mode()
             return
 
@@ -231,6 +234,12 @@ class EventLoop:
         tool_schemas = self._collect_tool_schemas()
         content, raw_calls = await self._call_providers(tool_schemas, messages=memory_messages)
 
+        # Debug: show raw response in TUI
+        debug_info = f"[model: {len(raw_calls)} tool calls | response: {len(content)} chars]"
+        for iface in self._registry.get_all(InterfaceBrick):
+            if hasattr(iface, "render_assistant_response"):
+                await iface.render_assistant_response(debug_info)
+
         await self._hooks.dispatch(HookType.POST_LLM, HookEvent(
             hook_type=HookType.POST_LLM,
             data={"content": content, "tool_calls": raw_calls},
@@ -248,7 +257,8 @@ class EventLoop:
         for iface in self._registry.get_all(InterfaceBrick):
             if hasattr(iface, "render_assistant_response"):
                 await iface.render_assistant_response(content)
-        await self._render_output(content)
+        render_content = content if content else "[empty response]"
+        await self._render_output(render_content)
 
     async def _enter_afk_mode(self) -> None:
         """Enter autonomous AFK mode: swap interfaces, start protocol engine."""

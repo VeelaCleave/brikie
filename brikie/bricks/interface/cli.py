@@ -38,6 +38,7 @@ class HermesTUI:
     def __init__(
         self,
         model_name: str = "unknown",
+        stdin_lines: Optional[List[str]] = None,
     ) -> None:
         self._model_name = model_name
         self._token_count = 0
@@ -47,6 +48,7 @@ class HermesTUI:
         self._messages: List[Dict[str, Any]] = []
         self._console = Console(highlight=False, force_terminal=sys.stdout.isatty())
         self._session = self._create_session()
+        self._stdin_lines = stdin_lines or []
 
     def _create_session(self) -> Optional[PromptSession]:
         """Create the prompt_toolkit session for input if terminal."""
@@ -207,11 +209,16 @@ class HermesTUI:
         import sys as _sys
         try:
             if self._session is None:
-                import asyncio
-                line = await asyncio.to_thread(_sys.stdin.readline)
-                return line.strip() if line else ""
+                if self._stdin_lines:
+                    line = self._stdin_lines.pop(0)
+                    if line == "/exit" or line == "":
+                        return "/exit"
+                    return line
+                return "/exit"
+            from prompt_toolkit.formatted_text import FormattedText
+            ft = FormattedText([("class:prompt", "You ")])
             text = await self._session.prompt_async(
-                message=Text.assemble(("You ", "bold cyan")),
+                message=ft,
             )
             return text.strip()
         except (EOFError, KeyboardInterrupt):
@@ -293,6 +300,10 @@ class CLIBrick(InterfaceBrick):
     async def render_user_message(self, content: str) -> None:
         if self._tui:
             self._tui.add_user_message(content)
+
+    async def render_assistant_response(self, content: str) -> None:
+        if self._tui:
+            self._tui.add_assistant_message(content)
 
     async def render_tool_calls(self, raw_calls: List[Dict[str, Any]]) -> None:
         """Display tool calls from the assistant before execution."""
