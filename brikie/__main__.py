@@ -126,13 +126,50 @@ async def main() -> None:
     if "/" not in set_path and not set_path.endswith(".json"):
         set_path = str(_BUILD_SETS_DIR / f"{set_path}.json")
 
+    from brikie.recovery import (
+        last_good_set,
+        record_good_set,
+        summarize_quarantine,
+    )
+
     loader = BuildLoader(registry)
+    build = None
+    loaded_path = set_path
     try:
-        build = loader.load(set_path)
+        # Resilient: a broken brick (e.g. a bad agent-authored one) is
+        # quarantined so the rest of the stack still boots.
+        build = loader.load(set_path, resilient=True)
         loader.validate_minimum_stack()
     except BuildSetError as exc:
-        print(f"[brikie] Error loading Build Set: {exc}", file=sys.stderr)
-        sys.exit(1)
+        # The requested set can't even reach a minimum stack. Fall back
+        # to the last set that booted cleanly, if any.
+        fallback = last_good_set()
+        if fallback and fallback != str(Path(set_path).resolve()):
+            print(f"[brikie] '{set_path}' couldn't start ({exc}).",
+                  file=sys.stderr)
+            print(f"[brikie] Falling back to your last working setup: "
+                  f"{fallback}", file=sys.stderr)
+            registry.clear()
+            try:
+                build = loader.load(fallback, resilient=True)
+                loader.validate_minimum_stack()
+                loaded_path = fallback
+            except BuildSetError as exc2:
+                print(f"[brikie] Fallback also failed: {exc2}", file=sys.stderr)
+                build = None
+        if build is None:
+            print(f"[brikie] Couldn't start: {exc}\n"
+                  f"          Run `brikie config` to set up a provider.",
+                  file=sys.stderr)
+            sys.exit(1)
+
+    if build.quarantined:
+        print(f"[brikie] {summarize_quarantine(build.quarantined)}",
+              file=sys.stderr)
+
+    # This set reached a viable minimum stack — remember it as the
+    # fallback for a future broken boot.
+    record_good_set(loaded_path)
 
     # CLI flags override provider configuration before init().
     # --preset applies a full named recipe; --model/--base-url/--api-key

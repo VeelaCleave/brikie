@@ -134,12 +134,30 @@ class EventLoop:
     # ------------------------------------------------------------------
 
     async def _phase_warm_up(self) -> None:
-        """Initialize every brick; each brick sets its own state to ACTIVE."""
-        bricks = list(self._registry._bricks.values())
-        for brick in bricks:
+        """Initialize every brick; quarantine any whose init() crashes.
+
+        A brick that raises during ``init()`` is unregistered and logged
+        rather than crashing the whole boot — the same graceful-
+        degradation contract the loader applies to instantiation. This is
+        the safety net under agent-authored bricks: one that breaks on
+        startup is dropped, and the rest of the stack still comes up.
+        """
+        self._quarantined: List[tuple] = []
+        for brick in list(self._registry._bricks.values()):
             logger.info("Warming up brick: %s", brick.name)
-            await brick.init()
-        logger.info("Warm-up complete: %d brick(s) active.", len(bricks))
+            try:
+                await brick.init()
+            except Exception as exc:
+                logger.exception("Brick %s failed to initialize — quarantined",
+                                 brick.name)
+                self._quarantined.append((brick.name, str(exc)))
+                try:
+                    self._registry.unregister(brick.name)
+                except Exception:
+                    logger.debug("Could not unregister %s", brick.name)
+        active = len(self._registry._bricks)
+        logger.info("Warm-up complete: %d brick(s) active, %d quarantined.",
+                    active, len(self._quarantined))
 
         self._register_memory_hooks()
         await self._register_brick_hooks()

@@ -94,6 +94,9 @@ class BuildSet:
     description: str = ""
     bricks: List[Dict[str, Any]] = field(default_factory=list)
     souls: Dict[str, Any] = field(default_factory=dict)
+    # (brk, error) for bricks that failed to load but were skipped so the
+    # rest of the stack could boot. Populated only in resilient mode.
+    quarantined: List[tuple] = field(default_factory=list)
 
 
 class BuildLoader:
@@ -108,17 +111,23 @@ class BuildLoader:
     def __init__(self, registry: BrickRegistry) -> None:
         self._registry = registry
 
-    def load(self, path: str | Path) -> BuildSet:
+    def load(self, path: str | Path, resilient: bool = False) -> BuildSet:
         """Load a Build Set JSON and register all its bricks.
 
         Args:
             path: Path to the Build Set JSON manifest.
+            resilient: When True, a brick that fails to instantiate is
+                quarantined (recorded in ``build.quarantined``) and the
+                rest of the stack still loads — one bad brick, e.g. a
+                broken agent-authored one, can't block the whole boot.
+                When False (default), any failure raises BuildSetError.
 
         Returns:
             The parsed BuildSet.
 
         Raises:
-            BuildSetError: If the file can't be read or bricks can't be loaded.
+            BuildSetError: If the file can't be read, or — in strict mode
+                — if any brick fails to load.
         """
         p = Path(path).expanduser().resolve()
         if not p.exists():
@@ -151,13 +160,21 @@ class BuildLoader:
                 failed.append((brk, str(exc)))
                 logger.error("Failed to load brick %s: %s", brk, exc)
 
-        if failed:
+        if failed and not resilient:
             detail = "; ".join(f"{brk}: {err}" for brk, err in failed)
             raise BuildSetError(
                 f"Build Set '{build.name}': {len(failed)} of "
                 f"{len(registered) + len(failed)} brick(s) failed to load — {detail}"
             )
 
+        build.quarantined = failed
+        if failed:
+            logger.warning(
+                "Build Set '%s': quarantined %d brick(s) so the rest could "
+                "boot — %s",
+                build.name, len(failed),
+                ", ".join(brk for brk, _ in failed),
+            )
         logger.info(
             "Build Set '%s': %d bricks registered, %d soul(s) loaded.",
             build.name, len(registered) - len(build.souls), len(build.souls),
