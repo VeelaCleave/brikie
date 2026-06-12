@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
 
 from brikie.bricks.interface.event_bus import InternalEventBusBrick
 from brikie.bricks.interface.base import InterfaceBrick

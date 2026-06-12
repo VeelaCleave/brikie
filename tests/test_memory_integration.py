@@ -10,10 +10,8 @@ Each test uses a real EventLoop with real memory bricks (no mocks) to
 catch HookEvent/dict type mismatches and other wiring bugs.
 """
 
-import asyncio
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List
 
 import pytest
 
@@ -359,7 +357,7 @@ class TestMemoryPipeline:
             hook_type=HookType.POST_LLM,
             data={
                 "content": "Event sourcing is a solid choice for audit logging. "
-                           "It depends on an append-only store like PostgreSQL.",
+                           "The audit log depends on PostgreSQL.",
                 "tool_calls": [],
             },
             brick_name="event_loop",

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Callable, Dict, List, Optional
+from typing import Callable, Dict, List
 
 from brikie.bricks.interface.base import InterfaceBrick
-from brikie.config.types import AFKMode, BrickState, BusEvent
+from brikie.config.types import BrickState, BusEvent
 
 logger = logging.getLogger(__name__)
 

@@ -58,20 +58,63 @@ class ExtractionResult:
 # Patterns
 # ---------------------------------------------------------------------------
 
-# Named entity patterns (simple regex-based detection)
+# Words that must never become entities on their own. Covers sentence
+# starters ("Let", "The", "Your"), pronouns, auxiliaries, and other
+# high-frequency words that the capitalized-word person heuristic would
+# otherwise misclassify.
+STOP_WORDS = frozenset({
+    # articles / determiners / pronouns
+    "the", "a", "an", "this", "that", "these", "those", "its", "it", "he",
+    "she", "we", "you", "i", "they", "them", "his", "her", "our", "your",
+    "my", "their", "who", "whom", "whose", "which", "what", "one", "some",
+    "any", "all", "both", "each", "every", "either", "neither", "such",
+    "same", "other", "another", "someone", "something", "anyone",
+    "anything", "everyone", "everything", "nobody", "nothing",
+    # auxiliaries / common verbs
+    "is", "are", "was", "were", "be", "been", "being", "am", "do", "does",
+    "did", "done", "have", "has", "had", "can", "could", "will", "would",
+    "shall", "should", "may", "might", "must", "let", "lets", "get", "got",
+    "make", "made", "use", "used", "using", "see", "say", "said", "go",
+    "going", "went", "know", "think", "want", "need", "try", "run", "add",
+    "set", "put", "take", "give", "look", "find", "found", "call", "keep",
+    "show", "tell", "ask", "work", "feel", "seem", "leave", "turn", "start",
+    "help", "talk", "read", "write", "check", "fix", "test",
+    # conjunctions / prepositions / adverbs
+    "and", "or", "but", "nor", "so", "yet", "for", "if", "then", "else",
+    "when", "where", "while", "why", "how", "because", "since", "though",
+    "although", "after", "before", "during", "until", "unless", "about",
+    "above", "below", "between", "into", "onto", "over", "under", "with",
+    "without", "within", "from", "to", "of", "in", "on", "at", "by", "as",
+    "up", "down", "out", "off", "not", "no", "yes", "now", "just", "also",
+    "very", "too", "only", "here", "there", "again", "once", "more", "most",
+    "less", "least", "much", "many", "few", "first", "last", "next", "new",
+    "old", "good", "bad", "great", "well", "still", "even", "back", "away",
+    "however", "therefore", "otherwise", "instead", "perhaps", "maybe",
+    "please", "thanks", "thank", "okay", "ok", "sure", "right", "wrong",
+    # conversational filler seen in real transcripts
+    "hello", "hi", "hey", "sorry", "note", "todo", "done", "ready",
+    # days / months (capitalized mid-sentence, never useful entities)
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday",
+    "sunday", "january", "february", "march", "april", "may", "june",
+    "july", "august", "september", "october", "november", "december",
+})
+
+MIN_ENTITY_LENGTH = 3
+
+# Named entity patterns, ordered most-specific first: when a name matches
+# several patterns, the first (most specific) type wins and the rest are
+# skipped. The PERSON pattern is intentionally last — it is the noisiest.
+# Bare verbs ("decided", "completed") are NOT entities; they only steer
+# hall classification in the spatial mapping below.
 ENTITY_PATTERNS = [
-    # People: "Alice", "Bob", "John Doe", "the user", "the developer"
-    (r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b', EntityType.PERSON),
-    # Projects: "project-alpha", "brikie", "the project"
-    (r'\b(project[-_\w]+|brikie|agent[-_\w]+)\b', EntityType.PROJECT),
     # Tools/Libraries: "SQLite", "Playwright", "ChromaDB"
-    (r'\b(SQLite|Playwright|ChromaDB|PyTorch|React|Django|Flask|Redis|PostgreSQL)\b', EntityType.TOOL),
+    (r'\b(SQLite|Playwright|ChromaDB|PyTorch|React|Django|Flask|Redis|PostgreSQL|Docker|Kubernetes|Git|GitHub|Python|Rust|TypeScript|JavaScript|vLLM)\b', EntityType.TOOL),
+    # Projects: "project-alpha", "brikie", "agent-foo"
+    (r'\b(project[-_]\w+|brikie|agent[-_]\w+)\b', EntityType.PROJECT),
     # Concepts: "authentication", "middleware", "context window"
-    (r'\b(authentication|authorization|middleware|compaction|context\s*window|memory|orchestration)\b', EntityType.CONCEPT),
-    # Decisions: "decided", "chose", "selected"
-    (r'\b(decid(ed|e?s|ed\s+on|ing)|chose|selected|adopt(ed|ing)|settled\s+on)\b', EntityType.DECISION),
-    # Milestones: "completed", "launched", "deployed", "merged"
-    (r'\b(complet(ed|e?s|ion)|launched|deployed|merged|release(d|s))\b', EntityType.MILESTONE),
+    (r'\b(authentication|authorization|middleware|compaction|context\s*window|orchestration|knowledge\s*graph|event\s*bus)\b', EntityType.CONCEPT),
+    # People: capitalized proper names — filtered hard in _extract_entities
+    (r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b', EntityType.PERSON),
 ]
 
 # Triple patterns (subject - predicate - object)
@@ -91,7 +134,7 @@ TRIPLE_PATTERNS = [
     # "X uses Y"
     (r'(\w+(?:\s+\w+)?)\s+uses?\s+(\w+(?:\s+\w+)?)', "uses"),
     # "X creates Y"
-    (r'(\w+(?:\s+\w+)?)\s+(creates?|makes?)\s+(\w+(?:\s+\w+)?)', "creates"),
+    (r'(\w+(?:\s+\w+)?)\s+(?:creates?|makes?)\s+(\w+(?:\s+\w+)?)', "creates"),
     # "X calls Y"
     (r'(\w+(?:\s+\w+)?)\s+calls?\s+(\w+(?:\s+\w+)?)', "calls"),
     # "X requires Y"
@@ -150,29 +193,56 @@ class EntityExtractor:
         )
 
     def _extract_entities(self, content: str) -> List[ExtractedEntity]:
-        """Extract named entities from content using regex patterns."""
+        """Extract named entities from content using regex patterns.
+
+        Patterns run most-specific first; once a name is claimed by one
+        type it is never re-recorded under another, so "Redis" cannot end
+        up as both a tool and a person.
+        """
         found: Dict[str, ExtractedEntity] = {}
 
         for pattern, entity_type in self._entity_patterns:
             matches = pattern.finditer(content)
             for match in matches:
                 name = match.group(0).strip().lower()
-                key = (name, entity_type.value)
 
-                if key not in found:
-                    # Build description from context
-                    start = max(0, match.start() - 20)
-                    end = min(len(content), match.end() + 20)
-                    context = content[start:end].strip()
+                if name in found:
+                    continue
+                if len(name) < MIN_ENTITY_LENGTH:
+                    continue
+                if any(word in STOP_WORDS for word in name.split()):
+                    continue
+                if entity_type is EntityType.PERSON:
+                    if self._is_sentence_start(content, match.start()) and " " not in name:
+                        # A lone capitalized word at the start of a sentence
+                        # is almost always just capitalization, not a name.
+                        continue
+                    if any(word in found for word in name.split()):
+                        # "Tune Redis ..." — a word already claimed by a more
+                        # specific type means this isn't a person's name.
+                        continue
 
-                    found[key] = ExtractedEntity(
-                        name=name,
-                        entity_type=entity_type,
-                        description=context,
-                        confidence=0.75,
-                    )
+                # Build description from context
+                start = max(0, match.start() - 20)
+                end = min(len(content), match.end() + 20)
+                context = content[start:end].strip()
+
+                found[name] = ExtractedEntity(
+                    name=name,
+                    entity_type=entity_type,
+                    description=context,
+                    confidence=0.75,
+                )
 
         return list(found.values())
+
+    @staticmethod
+    def _is_sentence_start(content: str, pos: int) -> bool:
+        """True when the character at ``pos`` begins the text or a sentence."""
+        i = pos - 1
+        while i >= 0 and content[i] in " \t":
+            i -= 1
+        return i < 0 or content[i] in '.!?:;\n"\'`*-•◆('
 
     def _extract_triples(
         self,
@@ -188,8 +258,10 @@ class EntityExtractor:
             for match in matches:
                 groups = match.groups()
                 if len(groups) >= 2:
-                    subject = groups[0].strip().lower()
-                    obj = groups[1].strip().lower()
+                    subject = self._clean_triple_term(groups[0])
+                    obj = self._clean_triple_term(groups[1])
+                    if subject is None or obj is None or subject == obj:
+                        continue
 
                     # Boost confidence if both entities were extracted
                     confidence = 0.6
@@ -207,6 +279,23 @@ class EntityExtractor:
                     ))
 
         return triples
+
+    @staticmethod
+    def _clean_triple_term(term: str) -> "str | None":
+        """Normalize a triple subject/object; None when nothing useful remains.
+
+        Strips leading articles/determiners ("the bus" → "bus") and rejects
+        terms that are stop words or too short to identify anything.
+        """
+        words = term.strip().lower().split()
+        while words and words[0] in STOP_WORDS:
+            words.pop(0)
+        cleaned = " ".join(words)
+        if len(cleaned) < MIN_ENTITY_LENGTH:
+            return None
+        if all(word in STOP_WORDS for word in words):
+            return None
+        return cleaned
 
     def _extract_spatial_mapping(
         self,

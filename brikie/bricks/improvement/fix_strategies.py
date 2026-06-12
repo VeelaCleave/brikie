@@ -69,7 +69,6 @@ def validate_args_against_schema(
         return {}, ["args is not a dict"]
 
     props = schema.get("properties", {})
-    required = set(schema.get("required", []))
     fixed: Dict[str, Any] = {}
     warnings: List[str] = []
 

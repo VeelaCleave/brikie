@@ -225,7 +225,6 @@ class TestWikiSearcher:
         await store.upsert_page(title="Pub Data", body="Important data records.", status="published")
         await store.upsert_page(title="Extra Page", body="Different content here.", status="draft")
         await searcher.rebuild_index()
-        results = await searcher.search("data")
         # Filter should only return matching status
         draft_results = await searcher.search("data", status="draft")
         for r in draft_results:

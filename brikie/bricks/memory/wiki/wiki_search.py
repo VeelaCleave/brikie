@@ -7,7 +7,7 @@ Scores are combined with 0.7 weight for body and 0.3 for frontmatter.
 
 import logging
 import re
-from typing import AsyncGenerator, List, Tuple
+from typing import List, Tuple
 
 from rank_bm25 import BM25Okapi
 

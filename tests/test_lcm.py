@@ -1,6 +1,5 @@
 """Tests for the LCM (Lossless Context Management) Brick."""
 
-import asyncio
 import os
 import tempfile
 

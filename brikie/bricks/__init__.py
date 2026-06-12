@@ -19,13 +19,13 @@ Submodules (each is independently importable):
 from __future__ import annotations
 
 import importlib
-import logging
+import logging as _stdlib_logging
 import pkgutil
 from typing import Any, Dict, List, Type
 
-logger = logging.getLogger(__name__)
-
 # ── ABCs only — no concrete bricks ────────────────────────────────────
+# NB: importing brikie.bricks.logging rebinds the name `logging` in this
+# package namespace, shadowing the stdlib module — hence the alias above.
 from brikie.bricks.interface import InterfaceBrick
 from brikie.bricks.logging import LoggingBrick
 from brikie.bricks.provider import ProviderBrick
@@ -34,6 +34,8 @@ from brikie.bricks.soul import SoulBrick
 from brikie.bricks.memory import MemoryBrick
 from brikie.bricks.improvement import ImprovementBrick
 from brikie.bricks.security import SecurityBrick
+
+logger = _stdlib_logging.getLogger(__name__)
 
 __all__ = [
     "InterfaceBrick",

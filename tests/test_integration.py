@@ -209,7 +209,7 @@ class TestFullPipeline:
         hooks.register(HookType.PRE_LLM, capture_hook)
 
         # Dispatch and verify
-        results = await hooks.dispatch_all("test-data")
+        await hooks.dispatch_all("test-data")
         assert captured == ["test-data", "test-data"]
 
     @pytest.mark.asyncio

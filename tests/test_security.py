@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from typing import Any, Dict
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
-import pytest
 
-from brikie.bricks.security.base import SecurityBrick, SecurityDecision, BlockedCommand
+from brikie.bricks.security.base import SecurityBrick, SecurityDecision
 from brikie.bricks.security.firewall import CommandFirewallBrick
 from brikie.bricks.security.sandbox import SandboxSecurityBrick, SandboxConfig
 from brikie.config.types import HookType

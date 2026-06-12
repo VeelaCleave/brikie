@@ -2,7 +2,7 @@
 
 import pytest
 from abc import ABC
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from brikie.config.types import BrickState
 from brikie.kernel.registry import InterfaceBrick, ProviderBrick, ToolBrick

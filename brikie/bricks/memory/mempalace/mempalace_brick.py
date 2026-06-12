@@ -70,14 +70,25 @@ class MempalaceBrick(MemoryBrick, ToolBrick):
         # Extract entities and triples
         result = self._extractor.extract(content, session_id)
 
-        # Store entities
+        # Store entities and place them in the spatial hierarchy
+        entity_ids: List[str] = []
         for entity in result.entities:
-            await self._store.upsert_entity(
+            entity_id = await self._store.upsert_entity(
                 name=entity.name,
                 entity_type=entity.entity_type.value,
                 session_id=session_id,
                 description=entity.description,
             )
+            entity_ids.append(entity_id)
+
+        if entity_ids:
+            wing_id = await self._store.ensure_region("wing", result.wing)
+            await self._store.ensure_region("room", result.room, parent_id=wing_id)
+            await self._store.ensure_region("hall", result.hall, parent_id=wing_id)
+            for entity_id in entity_ids:
+                await self._store.map_entity(
+                    entity_id, result.wing, result.room, result.hall
+                )
 
         # Store triples
         for triple in result.triples:

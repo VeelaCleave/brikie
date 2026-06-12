@@ -122,7 +122,7 @@ class KadeiaInstallerBrick(ToolBrick):
         logger.info(
             "Brick '%s' v%s installed%s",
             manifest.name, manifest.version,
-            f" and registered" if self._brick_registry else "",
+            " and registered" if self._brick_registry else "",
         )
 
         return {

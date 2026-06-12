@@ -1,6 +1,5 @@
 """Tests for the MemPalace Brick — Spatial/Temporal Knowledge Graph."""
 
-import asyncio
 import os
 import tempfile
 
@@ -206,6 +205,87 @@ class TestMempalaceStore:
         count = await store.get_triple_count()
         assert count == 0
 
+    @pytest.mark.asyncio
+    async def test_upsert_triple_deduplicates(self, store):
+        """Identical (subject, predicate, object) updates the existing row."""
+        await store.initialize()
+        s = await store.upsert_entity(name="bus", entity_type="concept")
+        o = await store.upsert_entity(name="kernel", entity_type="concept")
+        first = await store.upsert_triple(s, "depends_on", o, confidence=0.6)
+        second = await store.upsert_triple(s, "depends_on", o, confidence=0.85)
+        assert first == second
+        assert await store.get_triple_count() == 1
+        triples = await store.get_all_triples()
+        assert triples[0]["confidence"] == 0.85
+
+    @pytest.mark.asyncio
+    async def test_upsert_entity_deduplicates_by_name(self, store):
+        """Repeated upserts of the same name update one row, not insert many."""
+        await store.initialize()
+        first = await store.upsert_entity(name="redis", entity_type="concept")
+        second = await store.upsert_entity(name="Redis", entity_type="tool")
+        assert first == second
+        assert await store.get_entity_count() == 1
+
+    @pytest.mark.asyncio
+    async def test_upsert_entity_upgrades_generic_type(self, store):
+        """'concept' is upgraded to a specific type; specific types are kept."""
+        await store.initialize()
+        entity_id = await store.upsert_entity(name="redis", entity_type="concept")
+        await store.upsert_entity(name="redis", entity_type="tool")
+        entity = await store.get_entity(entity_id)
+        assert entity["entity_type"] == "tool"
+        # A later generic mention must not downgrade it back
+        await store.upsert_entity(name="redis", entity_type="concept")
+        entity = await store.get_entity(entity_id)
+        assert entity["entity_type"] == "tool"
+
+    @pytest.mark.asyncio
+    async def test_upsert_entity_preserves_description(self, store):
+        """A None description on re-upsert keeps the existing one."""
+        await store.initialize()
+        entity_id = await store.upsert_entity(
+            name="redis", entity_type="tool", description="in-memory store"
+        )
+        await store.upsert_entity(name="redis", entity_type="tool")
+        entity = await store.get_entity(entity_id)
+        assert entity["description"] == "in-memory store"
+
+    @pytest.mark.asyncio
+    async def test_search_entities(self, store):
+        """search_entities builds valid SQL and filters by pattern/type."""
+        await store.initialize()
+        await store.upsert_entity(name="redis", entity_type="tool")
+        await store.upsert_entity(name="alice", entity_type="person")
+        results = await store.search_entities(name_pattern="red")
+        assert len(results) == 1
+        assert results[0]["name"] == "redis"
+        results = await store.search_entities(entity_type="person")
+        assert len(results) == 1
+        assert results[0]["name"] == "alice"
+
+    @pytest.mark.asyncio
+    async def test_ensure_region_is_idempotent(self, store):
+        await store.initialize()
+        first = await store.ensure_region("wing", "project-alpha")
+        second = await store.ensure_region("wing", "project-alpha")
+        assert first == second
+        regions = await store.get_regions_by_type("wing")
+        assert len(regions) == 1
+
+    @pytest.mark.asyncio
+    async def test_map_entity_places_in_hierarchy(self, store):
+        await store.initialize()
+        entity_id = await store.upsert_entity(name="redis", entity_type="tool")
+        await store.map_entity(entity_id, "project-alpha", "general", "hall_facts")
+        # Idempotent for the same location
+        await store.map_entity(entity_id, "project-alpha", "general", "hall_facts")
+        spatial = await store.get_spatial_map_for_entity(entity_id)
+        assert spatial["wing"] == "project-alpha"
+        assert spatial["hall"] == "hall_facts"
+        entities = await store.get_entities_in_wing("project-alpha")
+        assert len(entities) == 1
+
 
 class TestEntityExtractor:
     """Tests for EntityExtractor."""
@@ -244,6 +324,75 @@ class TestEntityExtractor:
         content = "This is a long piece of content. " * 100
         result = extractor.extract(content)
         assert isinstance(result.entities, list)
+
+    def test_stop_words_are_not_entities(self, extractor):
+        """Sentence starters and pronouns must not become person entities."""
+        content = (
+            "Let me explain. The system works. Your code is fine. "
+            "This should help. Please review it. Now we wait."
+        )
+        result = extractor.extract(content)
+        names = {e.name for e in result.entities}
+        for noise in ("let", "the", "your", "this", "please", "now", "should"):
+            assert noise not in names
+
+    def test_sentence_initial_capital_is_not_a_person(self, extractor):
+        content = "Refactor the parser. Tomorrow brings new tasks."
+        result = extractor.extract(content)
+        person_names = {
+            e.name for e in result.entities if e.entity_type.value == "person"
+        }
+        assert "refactor" not in person_names
+        assert "tomorrow" not in person_names
+
+    def test_mid_sentence_name_is_a_person(self, extractor):
+        content = "We asked Alice about the schema."
+        result = extractor.extract(content)
+        people = [e for e in result.entities if e.entity_type.value == "person"]
+        assert [e.name for e in people] == ["alice"]
+
+    def test_multi_word_name_at_sentence_start(self, extractor):
+        content = "John Doe reviewed the patch."
+        result = extractor.extract(content)
+        people = {e.name for e in result.entities if e.entity_type.value == "person"}
+        assert "john doe" in people
+
+    def test_entity_claimed_by_specific_type_first(self, extractor):
+        """'Redis' is a tool — never duplicated as a person."""
+        content = "We migrated the cache to Redis last week."
+        result = extractor.extract(content)
+        redis = [e for e in result.entities if e.name == "redis"]
+        assert len(redis) == 1
+        assert redis[0].entity_type.value == "tool"
+
+    def test_bare_verbs_are_not_entities(self, extractor):
+        content = "We decided to ship it. The release was completed and merged."
+        result = extractor.extract(content)
+        names = {e.name for e in result.entities}
+        for verb in ("decided", "completed", "merged"):
+            assert verb not in names
+
+    def test_triple_terms_strip_articles(self, extractor):
+        content = "The engine depends on the bus."
+        result = extractor.extract(content)
+        deps = [t for t in result.triples if t.predicate == "depends_on"]
+        assert len(deps) == 1
+        assert deps[0].subject == "engine"
+        assert deps[0].object == "bus"
+
+    def test_triple_with_pronoun_subject_is_dropped(self, extractor):
+        content = "It depends on the weather."
+        result = extractor.extract(content)
+        assert all(t.subject != "it" for t in result.triples)
+
+    def test_creates_pattern_captures_object_not_predicate(self, extractor):
+        """Regression: the 'creates' pattern must not store the verb as object."""
+        content = "The loader creates registries."
+        result = extractor.extract(content)
+        creates = [t for t in result.triples if t.predicate == "creates"]
+        assert len(creates) == 1
+        assert creates[0].subject == "loader"
+        assert creates[0].object == "registries"
 
 
 class TestToolSchemas:
@@ -302,6 +451,28 @@ class TestMempalaceBrick:
         # Check that entities were extracted and stored
         entities = await brick._store.get_all_entities()
         assert len(entities) > 0
+
+    @pytest.mark.asyncio
+    async def test_brick_intercept_populates_spatial_map(self, brick):
+        """Entities extracted from a message land in the spatial hierarchy."""
+        await brick.init()
+        await brick.intercept_message(
+            "test-session", "user",
+            "In project-alpha, Redis was completed as the cache layer.",
+        )
+        wings = await brick._store.get_regions_by_type("wing")
+        assert any(w["name"] == "project-alpha" for w in wings)
+        entities = await brick._store.get_entities_in_wing("project-alpha")
+        assert any(e["name"] == "redis" for e in entities)
+
+    @pytest.mark.asyncio
+    async def test_brick_intercept_deduplicates_entities(self, brick):
+        """Mentioning the same entity twice yields one row."""
+        await brick.init()
+        await brick.intercept_message("s1", "user", "We rely on Redis heavily.")
+        await brick.intercept_message("s1", "user", "Tune Redis for performance.")
+        entities = await brick._store.search_entities(name_pattern="redis")
+        assert len(entities) == 1
 
     @pytest.mark.asyncio
     async def test_brick_build_context(self, brick):

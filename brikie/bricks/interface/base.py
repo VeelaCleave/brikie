@@ -5,7 +5,6 @@ skeleton for interfaces (CLI, Web UI, WebSocket, etc.).
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List
 
 from brikie.config.types import BrickState
 from brikie.kernel.registry import InterfaceBrick as InterfaceBrickABC

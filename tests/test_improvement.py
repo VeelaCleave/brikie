@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
-from unittest.mock import AsyncMock, MagicMock
+from typing import Any, Dict, Optional
 
-import pytest
 
-from brikie.bricks.improvement.base import FailureMode, FixAttempt, ImprovementBrick
+from brikie.bricks.improvement.base import ImprovementBrick
 from brikie.bricks.improvement.fix_strategies import (
     fuzzy_name_match,
     repair_json,

@@ -13,9 +13,7 @@ Tools:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import os
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -651,7 +649,6 @@ class ShellToolBrick(ToolBrick):
 
     async def _py_diagnostics(self, path: Path, severity: str) -> Dict[str, Any]:
         """Run flake8 or py_compile for Python diagnostics."""
-        import subprocess
 
         # Try flake8 first
         try:
@@ -678,7 +675,6 @@ class ShellToolBrick(ToolBrick):
 
     async def _ts_diagnostics(self, path: Path, severity: str) -> Dict[str, Any]:
         """Try tsc or npx tsc --noEmit for TypeScript diagnostics."""
-        import subprocess
 
         project_root = self._find_ts_project_root(path)
         if not project_root:
@@ -694,7 +690,7 @@ class ShellToolBrick(ToolBrick):
             path_str = str(path)
             rel_path = str(path.relative_to(project_root))
             all_lines = result.stdout.splitlines() + result.stderr.splitlines()
-            relevant = [l for l in all_lines if path_str in l or rel_path in l]
+            relevant = [ln for ln in all_lines if path_str in ln or rel_path in ln]
             return {
                 "filePath": str(path),
                 "issues": relevant[:50],

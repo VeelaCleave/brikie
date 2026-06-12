@@ -54,7 +54,38 @@ class MempalaceStore:
         valid_from: str | None = None,
         valid_to: str | None = None,
     ) -> str:
-        """Create or update an entity in the knowledge graph."""
+        """Create or update an entity in the knowledge graph.
+
+        Matches existing entities by normalized (case-insensitive) name so
+        repeated mentions update one row instead of accumulating duplicates.
+        A generic 'concept' classification is upgraded when a more specific
+        type arrives; an established specific type is never downgraded.
+        """
+        name = name.strip()
+        existing = await self._pool._execute(
+            "SELECT id, entity_type FROM entities "
+            "WHERE name = ? COLLATE NOCASE ORDER BY created_at ASC LIMIT 1",
+            (name,),
+            fetch="one",
+        )
+        if existing is not None:
+            entity_id, existing_type = existing
+            new_type = existing_type
+            if existing_type == "concept" and entity_type != "concept":
+                new_type = entity_type
+            await self._pool._execute(
+                """UPDATE entities
+                   SET entity_type = ?,
+                       description = COALESCE(?, description),
+                       session_id = COALESCE(?, session_id),
+                       valid_from = COALESCE(?, valid_from),
+                       valid_to = COALESCE(?, valid_to)
+                   WHERE id = ?""",
+                (new_type, description, session_id, valid_from, valid_to, entity_id),
+                fetch="one",
+            )
+            return entity_id
+
         entity_id = str(uuid.uuid4())
         await self._pool._insert(
             """INSERT INTO entities (id, name, entity_type, session_id, description,
@@ -116,7 +147,29 @@ class MempalaceStore:
         valid_from: str | None = None,
         valid_to: str | None = None,
     ) -> str:
-        """Create or update a triple relationship. Returns triple_id."""
+        """Create or update a triple relationship. Returns triple_id.
+
+        An identical (subject, predicate, object) triple is updated in
+        place — confidence keeps the highest value seen — instead of
+        accumulating duplicate rows.
+        """
+        existing = await self._pool._execute(
+            "SELECT id, confidence FROM triples "
+            "WHERE subject_id = ? AND predicate = ? AND object_id = ? LIMIT 1",
+            (subject_id, predicate, object_id),
+            fetch="one",
+        )
+        if existing is not None:
+            triple_id, existing_confidence = existing
+            await self._pool._execute(
+                "UPDATE triples SET confidence = ?, "
+                "valid_from = COALESCE(?, valid_from), valid_to = COALESCE(?, valid_to) "
+                "WHERE id = ?",
+                (max(confidence, existing_confidence or 0.0), valid_from, valid_to, triple_id),
+                fetch="one",
+            )
+            return triple_id
+
         triple_id = str(uuid.uuid4())
         await self._pool._insert(
             """INSERT INTO triples (id, subject_id, predicate, object_id,
@@ -283,6 +336,47 @@ class MempalaceStore:
         )
         return region_id
 
+    async def ensure_region(
+        self,
+        region_type: str,
+        name: str,
+        parent_id: str | None = None,
+    ) -> str:
+        """Get a region by type+name, creating it if missing. Returns region_id."""
+        row = await self._pool._execute(
+            "SELECT id FROM spatial_regions WHERE region_type = ? AND name = ? LIMIT 1",
+            (region_type, name),
+            fetch="one",
+        )
+        if row is not None:
+            return row[0]
+        return await self.create_region(region_type, name, parent_id=parent_id)
+
+    async def map_entity(
+        self,
+        entity_id: str,
+        wing: str,
+        room: str,
+        hall: str,
+        distance: float = 1.0,
+    ) -> str:
+        """Place an entity in the spatial hierarchy. Idempotent per location."""
+        row = await self._pool._execute(
+            "SELECT id FROM spatial_map "
+            "WHERE entity_id = ? AND wing = ? AND room = ? AND hall = ? LIMIT 1",
+            (entity_id, wing, room, hall),
+            fetch="one",
+        )
+        if row is not None:
+            return row[0]
+        map_id = str(uuid.uuid4())
+        await self._pool._insert(
+            "INSERT INTO spatial_map (id, entity_id, wing, room, hall, distance) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (map_id, entity_id, wing, room, hall, distance),
+        )
+        return map_id
+
     async def get_regions_by_type(self, region_type: str) -> list[dict]:
         """Get all regions of a specific type."""
         rows = await self._pool._execute(
@@ -392,8 +486,10 @@ class MempalaceStore:
         entity_type: str | None = None,
     ) -> list[dict]:
         """Search entities by name pattern and type."""
-        query = "SELECT id, name, entity_type, session_id, description, created_at "
-        "FROM entities WHERE 1=1"
+        query = (
+            "SELECT id, name, entity_type, session_id, description, created_at "
+            "FROM entities WHERE 1=1"
+        )
         params: list = []
         if name_pattern:
             query += " AND name LIKE ?"

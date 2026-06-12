@@ -120,7 +120,7 @@ class CommandFirewallBrick(SecurityBrick):
         args_text = _serialize_args(args)
         match, desc = self._match_pattern(args_text)
         if match:
-            self._last_reason = desc or f"Matched block pattern in arguments"
+            self._last_reason = desc or "Matched block pattern in arguments"
             self._last_rule = match
             return SecurityDecision.BLOCK
 

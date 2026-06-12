@@ -4,7 +4,6 @@ Provides simple tools (calculator, reverse_string) that demonstrate
 the ToolBrick interface with OpenAI-compatible schemas.
 """
 
-import json
 import logging
 from typing import Any, Dict, List
 
