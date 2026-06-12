@@ -59,6 +59,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Rerun the first-run provider setup wizard",
     )
     parser.add_argument(
+        "--log",
+        default=None,
+        metavar="LEVEL",
+        help="Log level to stderr (debug, info, warning). The gateway "
+             "service uses 'info' so its logs reach journald.",
+    )
+    parser.add_argument(
         "--continue",
         dest="resume",
         action="store_true",
@@ -77,8 +84,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "command",
         nargs="?",
         default=None,
-        help="'config' to (re)run setup — pick a provider and connect a "
-             "chat app. Omit to start the agent.",
+        help="'config' to (re)run setup, or 'gateway <status|logs|stop|"
+             "restart>' to manage the background chat service. Omit to "
+             "start the agent.",
+    )
+    parser.add_argument(
+        "action",
+        nargs="?",
+        default=None,
+        help=argparse.SUPPRESS,  # sub-action for 'gateway'
     )
     return parser.parse_args(argv)
 
@@ -86,6 +100,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 async def main() -> None:
     """Bootstrap the Baseplate kernel and run the event loop."""
     args = parse_args()
+
+    if args.log:
+        level = getattr(logging, args.log.upper(), logging.INFO)
+        logging.basicConfig(
+            level=level,
+            format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        )
 
     # Persisted secrets (chat tokens, etc.) — an explicit export wins.
     from brikie.connect import load_env_file
@@ -177,6 +198,9 @@ def entry_point() -> None:
         from brikie.onboard import run_config
         load_env_file()
         sys.exit(run_config(_BUILD_SETS_DIR))
+    if args.command == "gateway":
+        from brikie.gateway import run_gateway_command
+        sys.exit(run_gateway_command(args.action or "status"))
     if args.command:
         print(f"[brikie] Unknown command '{args.command}'. Did you mean 'config'?",
               file=sys.stderr)

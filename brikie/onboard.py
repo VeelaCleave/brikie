@@ -155,6 +155,24 @@ def _connect_chat(console: Console, sets_dir: Path) -> None:
         f"first person to message the bot becomes its owner)[/]"
     )
 
+    # The whole point: run it as a background service, not a terminal.
+    from brikie.gateway import install_service, make_gateway_set
+
+    raw = console.input(
+        f"  run {plat['label']} now as a background service? "
+        f"[dim](enter for[/] [{ACCENT}]yes[/][dim])[/]: "
+    ).strip().lower()
+    if raw in ("", "y", "yes"):
+        gw_set = make_gateway_set(sets_dir, "default", plat["brk"])
+        ok, msg = install_service(gw_set)
+        if ok:
+            console.print(f"  [green]✓ {plat['label']} gateway is live[/] — "
+                          f"[dim]close this window, the bot stays online.[/]")
+            console.print(f"  [dim]{msg}[/]")
+        else:
+            console.print(f"  [yellow]couldn't start the service: {msg}[/]")
+            console.print("  [dim]start it later with: brikie gateway restart[/]")
+
 
 # ──────────────────────────────────────────────────────────────────────
 # Steps

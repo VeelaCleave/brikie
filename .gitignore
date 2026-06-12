@@ -36,3 +36,4 @@ brikie/bricks/memory/wiki/wiki_directory/
 
 # Veela's personal Discord testing set (contains her user id)
 /brikie/bricks/build/sets/discord.json
+/brikie/bricks/build/sets/*-gateway.json
