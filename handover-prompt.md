@@ -92,13 +92,20 @@ To point BRK-450 at a local registry, give it config in a build set:
 
 ### 🎯 What's Next — Phase F (hardening & depth)
 
-**Deployment (Veela is buying brikie.co + a VPS right now — expect
-credentials early next session):**
-1. Add auth to `POST /bricks/publish` (token header) — REQUIRED before
-   the registry is public; everything else about the server is ready
-2. Deploy: DNS A record → Ubuntu 24.04 VPS → Caddy for HTTPS →
-   systemd unit running `python3 -m brikie.server --base-url
-   https://brikie.co --data-dir /var/lib/brikie/registry`
+**Deployment — DONE. brikie.co is LIVE** (OVH VPS 54.38.78.229,
+Ubuntu 26.04; ssh -i ~/.ssh/id_ed25519_shared ubuntu@54.38.78.229).
+Publish auth shipped (Bearer token; server token in
+/etc/brikie/registry.env on the VPS). Landing page with falling-brick
+hero deployed. First community brick `compliment` v0.1.0 published and
+verified by a local agent installing it from the DEFAULT registry URL.
+Redeploy: `git archive HEAD | ssh … 'tar -x -C /opt/brikie/app'` then
+pip install -e + `sudo systemctl restart brikie-registry`.
+Remaining deployment niggles:
+1. The GitHub repo is PRIVATE — the generated install.sh's
+   `pip install git+https://github.com/VeelaCleave/brikie` fails for
+   the public. Make the repo public (Veela's call) or publish to PyPI.
+2. www.brikie.co cert may still be pending (LE cached the old parking
+   IP; Caddy auto-retries — check `journalctl -u caddy`). Apex is fine.
 
 **Steerable Dreamer + GitHub flywheel (design agreed with Veela this
 session — build in this order):**
