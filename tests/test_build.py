@@ -29,7 +29,6 @@ class TestBrickIndex:
         assert BRICK_INDEX["BRK-100"] == "brikie.kernel.registry.ProviderBrick"
         assert BRICK_INDEX["BRK-200"] == "brikie.bricks.provider.http_provider.HTTPProvider"
         assert BRICK_INDEX["BRK-300"] == "brikie.bricks.interface.cli.CLIBrick"
-        assert BRICK_INDEX["BRK-400"] == "brikie.bricks.tool.dummy.DummyToolBrick"
 
 
 class TestBuildLoader:
@@ -89,7 +88,7 @@ class TestBuildLoader:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump({
                 "name": "test",
-                "bricks": ["BRK-400", "BRK-500", "BRK-510"],
+                "bricks": ["BRK-310", "BRK-500", "BRK-510"],
             }, f)
             path = f.name
         build = loader.load(path)
@@ -128,7 +127,7 @@ class TestBuildLoader:
                 "name": "test",
                 "bricks": [
                     {
-                        "brk": "BRK-400",
+                        "brk": "BRK-310",
                         "config": {},
                     },
                 ],

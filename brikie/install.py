@@ -59,7 +59,6 @@ CATALOG: Dict[str, List[CatalogEntry]] = {
     "Tool Bricks": [
         CatalogEntry("BRK-410", "File Tools", "bash, read/write file, glob, grep, LSP diagnostics", default=True),
         CatalogEntry("BRK-420", "CloakBrowser", "Stealth web browsing that passes bot detection", default=True),
-        CatalogEntry("BRK-400", "Dummy Tool", "Calculator/string tools for testing the loop"),
         CatalogEntry("BRK-450", "Registry Installer", "Fetch and install bricks from the central registry"),
     ],
     "Memory Bricks": [

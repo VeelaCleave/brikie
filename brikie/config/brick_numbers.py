@@ -46,7 +46,6 @@ BRICK_NUMBERS: Dict[str, str] = {
     "InternalEventBusBrick": "BRK-310",
 
     # ── Tool Bricks (400-499) ─────────────────────────────────────────
-    "DummyToolBrick": "BRK-400",
     "ShellToolBrick": "BRK-410",
     "CloakBrowserBrick": "BRK-420",
     "RegistryInstallerBrick": "BRK-450",

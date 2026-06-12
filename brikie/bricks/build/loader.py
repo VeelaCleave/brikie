@@ -33,7 +33,6 @@ BRICK_INDEX: Dict[str, str] = {
     "BRK-310": "brikie.bricks.interface.event_bus.InternalEventBusBrick",
 
     # ── Tool Bricks (400-499) ─────────────────────────────────────────
-    "BRK-400": "brikie.bricks.tool.dummy.DummyToolBrick",
     "BRK-410": "brikie.bricks.tool.file_tools.ShellToolBrick",
     "BRK-420": "brikie.bricks.tool.cloakbrowser.CloakBrowserBrick",
     "BRK-450": "brikie.bricks.registry.installer.RegistryInstallerBrick",

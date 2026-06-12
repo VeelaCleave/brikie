@@ -19,7 +19,6 @@ from brikie.bricks.soul.foreman import Foreman
 from brikie.bricks.soul.mason import Mason
 from brikie.bricks.soul.web_design_agent import WebDesignAgent
 from brikie.bricks.tool.cloakbrowser import CloakBrowserBrick
-from brikie.bricks.tool.dummy import DummyToolBrick
 from brikie.bricks.tool.file_tools import ShellToolBrick
 from brikie.config.brick_numbers import BRICK_NUMBERS, brick_number, bricks_by_category
 
@@ -30,7 +29,6 @@ _CONCRETE_BRICKS = [
     (HTTPProvider, "BRK-200"),
     (CLIBrick, "BRK-300"),
     (InternalEventBusBrick, "BRK-310"),
-    (DummyToolBrick, "BRK-400"),
     (ShellToolBrick, "BRK-410"),
     (CloakBrowserBrick, "BRK-420"),
     (RegistryInstallerBrick, "BRK-450"),
@@ -73,7 +71,7 @@ class TestBrickNumbers:
 
     def test_registry_count(self):
         """BRICK_NUMBERS dict covers all concrete bricks + ABCs."""
-        assert len(BRICK_NUMBERS) == 29
+        assert len(BRICK_NUMBERS) == 28
 
     def test_all_numbers_have_brk_prefix(self):
         """Every entry should start with BRK-."""
