@@ -39,6 +39,7 @@ class CatalogEntry:
     default: bool = False
     config: Dict[str, Any] = field(default_factory=dict)
     preset: str | None = None  # provider preset id (BRK-200 variants)
+    dev: bool = False  # hidden on brikie.co unless dev mode is on
 
     @property
     def value(self) -> str:
@@ -64,7 +65,7 @@ CATALOG: Dict[str, List[CatalogEntry]] = {
     "Tool Bricks": [
         CatalogEntry("BRK-410", "File Tools", "bash, read/write file, glob, grep, LSP diagnostics", default=True),
         CatalogEntry("BRK-420", "CloakBrowser", "Stealth web browsing that passes bot detection", default=True),
-        CatalogEntry("BRK-430", "GitHub", "Read repo issues; feeds the Dreamer triaged community requests"),
+        CatalogEntry("BRK-430", "GitHub", "Read repo issues; feeds the Dreamer triaged community requests", dev=True),
         CatalogEntry("BRK-450", "Registry Installer", "Fetch and install bricks from the central registry"),
     ],
     "Memory Bricks": [
@@ -74,15 +75,15 @@ CATALOG: Dict[str, List[CatalogEntry]] = {
     ],
     "Logging Bricks": [
         CatalogEntry("BRK-700", "Token Logger", "Track token usage and cost per call"),
-        CatalogEntry("BRK-710", "Tool Tracer", "Record every tool call and result"),
-        CatalogEntry("BRK-720", "Diagnostics", "Session stats the Dreamer mines for proposals"),
+        CatalogEntry("BRK-710", "Tool Tracer", "Record every tool call and result", dev=True),
+        CatalogEntry("BRK-720", "Diagnostics", "Session stats the Dreamer mines for proposals", dev=True),
     ],
     "Security Bricks": [
         CatalogEntry("BRK-800", "Command Firewall", "Block destructive shell commands"),
-        CatalogEntry("BRK-810", "Sandbox", "Isolated execution environment"),
+        CatalogEntry("BRK-810", "Sandbox", "Isolated execution environment", dev=True),
     ],
     "Improvement Bricks": [
-        CatalogEntry("BRK-900", "Auto-Fixer", "Repair malformed tool calls without an LLM round-trip"),
+        CatalogEntry("BRK-900", "Auto-Fixer", "Repair malformed tool calls without an LLM round-trip", dev=True),
     ],
     "Soul Bricks (needed for /afk)": [
         CatalogEntry("BRK-500", "Foreman", "Site-boss orchestrator: plans, delegates, verifies"),
@@ -127,7 +128,10 @@ def _pick_group(console: Console, group: str, entries: List[CatalogEntry]) -> Li
         marker = "●" if entry.default else "○"
         if entry.default:
             defaults.append(i)
-        console.print(f"  {marker} {i}. [bold]{entry.label}[/]  [dim]{entry.blurb}[/]")
+        dev_tag = " [dim italic]\\[dev][/]" if entry.dev else ""
+        console.print(
+            f"  {marker} {i}. [bold]{entry.label}[/]{dev_tag}  [dim]{entry.blurb}[/]"
+        )
 
     default_str = ",".join(str(d) for d in defaults) if defaults else "none"
     while True:

@@ -448,3 +448,38 @@ class TestPublishAuth:
         })
         result = await installer.execute("registry_publish", {"name": "greeter"})
         assert result["published"] is True
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Dev bricks — hidden on the site unless dev mode is toggled
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestDevBricks:
+    def test_expected_dev_flags(self):
+        from brikie.install import CATALOG
+        flags = {
+            e.brk: e.dev for entries in CATALOG.values() for e in entries
+        }
+        assert flags["BRK-430"] is True       # GitHub
+        assert flags["BRK-710"] is True       # Tool Tracer
+        assert flags["BRK-720"] is True       # Diagnostics
+        assert flags["BRK-810"] is True       # Sandbox
+        assert flags["BRK-900"] is True       # Auto-Fixer
+        # The flagship features stay visible
+        assert flags["BRK-450"] is False      # Registry Installer
+        assert flags["BRK-500"] is False      # Foreman
+        assert flags["BRK-410"] is False      # File Tools
+
+    def test_page_marks_dev_bricks_hidden(self):
+        from brikie.server.website import render_index_html
+        page = render_index_html([])
+        assert 'class="brick dev-brick"' in page
+        assert "devmode" in page              # the toggle exists
+        # all-dev group hides as a whole fieldset
+        assert '<fieldset class="dev-brick"><legend>Improvement' in page
+
+    def test_dev_bricks_remain_installable(self):
+        # hidden on the page ≠ forbidden in the generator
+        build = generate_buildset(["BRK-300", "BRK-200", "BRK-430"], "x")
+        assert any(b["brk"] == "BRK-430" for b in build["bricks"])
