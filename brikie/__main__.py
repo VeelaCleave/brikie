@@ -72,7 +72,8 @@ async def main() -> None:
 
     loader = BuildLoader(registry)
     try:
-        loader.load(set_path)
+        build = loader.load(set_path)
+        loader.validate_minimum_stack()
     except BuildSetError as exc:
         print(f"[brikie] Error loading Build Set: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -87,11 +88,24 @@ async def main() -> None:
                     api_key=args.api_key,
                 )
 
+    # Wire the AFK manager when the set ships both negotiating souls.
+    afk_manager = None
+    if "dreamer" in build.souls and "foreman" in build.souls:
+        from brikie.kernel.afk_manager import AFKManager
+        from brikie.kernel.registry import InterfaceBrick
+
+        cli = next(
+            (b for b in registry.get_all(InterfaceBrick) if b.name == "cli"), None
+        )
+        afk_manager = AFKManager(registry, cli_brick=cli)
+
     loop = EventLoop(
         registry=registry,
         state=state,
         hooks=hooks,
+        afk_manager=afk_manager,
         system_prompt=DEFAULT_SYSTEM_PROMPT,
+        souls=build.souls,
     )
 
     try:

@@ -48,7 +48,7 @@ class KadeiaRegistry:
         """Fetch a single brick manifest from the registry.
 
         Args:
-            name: Brick name (e.g. "sisyphus_orchestrator").
+            name: Brick name (e.g. "foreman").
             version: Optional semantic version.  If None the latest is used.
 
         Returns:

@@ -8,7 +8,7 @@ from brikie.bricks.interface.event_bus import InternalEventBusBrick
 from brikie.bricks.interface.base import InterfaceBrick
 from brikie.bricks.soul.base import SoulBrick
 from brikie.bricks.soul.dreamer import Dreamer
-from brikie.bricks.soul.sisyphus_orchestrator import SisyphusOrchestrator
+from brikie.bricks.soul.foreman import Foreman
 from brikie.config.types import AFKMode, BrickState, BusEvent
 from brikie.kernel.afk_manager import AFKManager
 from brikie.kernel.afk_protocol import AFKProtocolEngine, AFKCycleResult, Proposal
@@ -32,7 +32,7 @@ class TestBusEvent:
         event = BusEvent(
             event_type="dreamer.proposal",
             source_soul="dreamer",
-            target_soul="sisyphus_orchestrator",
+            target_soul="foreman",
             payload={"proposal": "refactor X"},
         )
         assert event.event_type == "dreamer.proposal"
@@ -62,7 +62,7 @@ class TestInternalEventBusBrick:
 
         event = BusEvent(
             event_type="test.event",
-            source_soul="sisyphus",
+            source_soul="foreman",
             target_soul="dreamer",
             payload={"msg": "hello"},
         )
@@ -77,7 +77,7 @@ class TestInternalEventBusBrick:
         bus = InternalEventBusBrick()
         await bus.init()
         bus.register_soul("dreamer")
-        bus.register_soul("sisyphus")
+        bus.register_soul("foreman")
 
         event = BusEvent(
             event_type="broadcast",
@@ -88,9 +88,9 @@ class TestInternalEventBusBrick:
         await bus.publish(event)
 
         dreamer_event = await bus.consume("dreamer")
-        sisyphus_event = await bus.consume("sisyphus")
+        foreman_event = await bus.consume("foreman")
         assert dreamer_event.payload["msg"] == "hello all"
-        assert sisyphus_event.payload["msg"] == "hello all"
+        assert foreman_event.payload["msg"] == "hello all"
         await bus.shutdown()
 
     async def test_consume_unknown_soul_returns_error(self):
@@ -138,7 +138,7 @@ class TestInternalEventBusBrick:
         bus = InternalEventBusBrick()
         await bus.init()
         bus.register_soul("dreamer")
-        bus.register_soul("sisyphus")
+        bus.register_soul("foreman")
 
         await bus.output("test message")
 
@@ -210,14 +210,14 @@ class TestAFKManager:
 
         souls = [
             type("Dreamer", (SoulBrick,), {})(),
-            type("Sisyphus", (SoulBrick,), {})(),
+            type("Foreman", (SoulBrick,), {})(),
         ]
         souls[0].name = "dreamer"
-        souls[1].name = "sisyphus_orchestrator"
+        souls[1].name = "foreman"
 
         await manager.enter_afk_mode(souls=souls)
         assert "dreamer" in manager.event_bus._queues
-        assert "sisyphus_orchestrator" in manager.event_bus._queues
+        assert "foreman" in manager.event_bus._queues
         await manager.exit_afk_mode()
 
 
@@ -241,7 +241,7 @@ class TestAFKProtocolEngine:
         engine = AFKProtocolEngine(
             event_bus=bus,
             dreamer_soul=Dreamer(),
-            sisyphus_soul=SisyphusOrchestrator(),
+            foreman_soul=Foreman(),
         )
         assert engine.running is False
         engine.stop()
@@ -252,7 +252,7 @@ class TestAFKProtocolEngine:
         engine = AFKProtocolEngine(
             event_bus=bus,
             dreamer_soul=Dreamer(),
-            sisyphus_soul=SisyphusOrchestrator(),
+            foreman_soul=Foreman(),
         )
         assert engine.cycle_count == 0
         assert engine.results == []

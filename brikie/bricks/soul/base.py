@@ -19,7 +19,7 @@ class SoulBrick(ABC):
     """Abstract base class for Soul/Identity persona manifests.
 
     Attributes:
-        name: Canonical soul name (e.g., "sisyphus_orchestrator").
+        name: Canonical soul name (e.g., "foreman").
         system_prompt: The system prompt defining this persona.
         allowed_tools: Tool names this soul is authorized to use. ["*"] = all.
         behavioral_constraints: Constraints dict (e.g., strict_mode, max_subagents).

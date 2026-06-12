@@ -55,7 +55,7 @@ def get_kadeia_tools() -> list[dict[str, Any]]:
                     "properties": {
                         "name": {
                             "type": "string",
-                            "description": "Canonical brick name to install (e.g. 'sisyphus_orchestrator').",
+                            "description": "Canonical brick name to install (e.g. 'foreman').",
                         },
                         "version": {
                             "type": "string",

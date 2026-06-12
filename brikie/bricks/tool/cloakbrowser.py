@@ -344,7 +344,21 @@ class CloakBrowserBrick(ToolBrick):
         self._page: Any = None
 
     async def init(self) -> None:
-        """Initialize the browser with CloakBinary."""
+        """Lightweight init — the browser launches lazily on first use.
+
+        Launching Chromium at warm-up would slow every boot and break the
+        Baseplate when no browser binary is present; the agent may never
+        call a browser tool in a session.
+        """
+        binary_path = find_cloakbrowser_binary()
+        if binary_path:
+            logger.info("CloakBrowser binary found: %s", binary_path)
+        else:
+            logger.info("No CloakBrowser binary cached — will fall back to Chromium on first use.")
+        await super().init()
+
+    async def _launch_browser(self) -> None:
+        """Start Playwright and launch the stealth browser."""
         binary_path = find_cloakbrowser_binary()
 
         try:
@@ -392,11 +406,16 @@ class CloakBrowserBrick(ToolBrick):
                 });
             """)
 
-            logger.info("CloakBrowser initialized successfully")
+            logger.info("CloakBrowser launched successfully")
 
         except Exception as exc:
-            logger.error("CloakBrowser init failed: %s", exc, exc_info=True)
+            logger.error("CloakBrowser launch failed: %s", exc, exc_info=True)
             raise
+
+    async def _ensure_browser(self) -> None:
+        """Launch the browser on first tool use."""
+        if self._page is None:
+            await self._launch_browser()
 
     async def shutdown(self) -> None:
         """Gracefully close the browser."""
@@ -429,8 +448,13 @@ class CloakBrowserBrick(ToolBrick):
             - browser_scroll: Scroll page
             - browser_wait: Wait for condition
         """
-        if self._page is None:
-            raise RuntimeError("Browser page not initialized")
+        try:
+            await self._ensure_browser()
+        except Exception as exc:
+            return {
+                "success": False,
+                "error": f"Browser unavailable: {exc}",
+            }
 
         if name == "browser_navigate":
             return await self._navigate(args)

@@ -52,7 +52,7 @@ BRICK_NUMBERS: Dict[str, str] = {
     "KadeiaInstallerBrick": "BRK-450",
 
     # ── Soul Bricks (500-599) ─────────────────────────────────────────
-    "SisyphusOrchestrator": "BRK-500",
+    "Foreman": "BRK-500",
     "Dreamer": "BRK-510",
     "CryptoTradingAgent": "BRK-520",
     "WebDesignAgent": "BRK-530",

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-import asyncio
 import logging
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
-from brikie.bricks.interface.event_bus import InternalEventBusBrick
-from brikie.bricks.soul.base import SoulBrick
-from brikie.config.types import AFKMode, BrickState
+from brikie.config.types import AFKMode
 from brikie.kernel.registry import BrickRegistry, InterfaceBrick
+
+if TYPE_CHECKING:
+    from brikie.bricks.interface.event_bus import InternalEventBusBrick
+    from brikie.bricks.soul.base import SoulBrick
 
 logger = logging.getLogger(__name__)
 
@@ -28,11 +29,17 @@ class AFKManager:
     def __init__(
         self,
         registry: BrickRegistry,
-        cli_brick: Optional[CLIBrick] = None,
+        cli_brick: Optional[InterfaceBrick] = None,
+        event_bus: "Optional[InternalEventBusBrick]" = None,
     ) -> None:
         self._registry = registry
         self._cli_brick = cli_brick
-        self._event_bus = InternalEventBusBrick()
+        if event_bus is None:
+            # Lazy import keeps the kernel free of brick imports at module
+            # load; callers (e.g. __main__) normally inject the bus.
+            from brikie.bricks.interface.event_bus import InternalEventBusBrick
+            event_bus = InternalEventBusBrick()
+        self._event_bus = event_bus
         self._mode: AFKMode = AFKMode.INTERACTIVE
 
     @property

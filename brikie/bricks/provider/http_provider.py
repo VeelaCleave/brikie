@@ -46,6 +46,14 @@ class HTTPProvider(ProviderBrick):
     def name(self) -> str:
         return self._name
 
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @property
+    def base_url(self) -> str:
+        return self._base_url
+
     def configure(
         self,
         model: Optional[str] = None,

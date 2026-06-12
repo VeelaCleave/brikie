@@ -1,0 +1,16 @@
+{
+  "name": "minimal",
+  "description": "Bare minimum stack: CLI interface, local provider, file tools",
+  "bricks": [
+    {
+      "brk": "BRK-200",
+      "config": {
+        "model": "deepseek-v4-flash-spark",
+        "base_url": "http://localhost:8000/v1",
+        "api_key": "not-needed"
+      }
+    },
+    {"brk": "BRK-300"},
+    {"brk": "BRK-410"}
+  ]
+}

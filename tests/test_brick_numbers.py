@@ -15,7 +15,7 @@ from brikie.bricks.security.firewall import CommandFirewallBrick
 from brikie.bricks.security.sandbox import SandboxSecurityBrick
 from brikie.bricks.soul.crypto_trading_agent import CryptoTradingAgent
 from brikie.bricks.soul.dreamer import Dreamer
-from brikie.bricks.soul.sisyphus_orchestrator import SisyphusOrchestrator
+from brikie.bricks.soul.foreman import Foreman
 from brikie.bricks.soul.web_design_agent import WebDesignAgent
 from brikie.bricks.tool.cloakbrowser import CloakBrowserBrick
 from brikie.bricks.tool.dummy import DummyToolBrick
@@ -33,7 +33,7 @@ _CONCRETE_BRICKS = [
     (ShellToolBrick, "BRK-410"),
     (CloakBrowserBrick, "BRK-420"),
     (KadeiaInstallerBrick, "BRK-450"),
-    (SisyphusOrchestrator, "BRK-500"),
+    (Foreman, "BRK-500"),
     (Dreamer, "BRK-510"),
     (CryptoTradingAgent, "BRK-520"),
     (WebDesignAgent, "BRK-530"),

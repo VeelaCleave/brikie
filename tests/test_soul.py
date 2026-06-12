@@ -1,14 +1,14 @@
 """Unit tests for Soul/Identity Bricks.
 
 Tests the SoulBrick abstract base class and all four concrete soul
-personas: SisyphusOrchestrator, Dreamer, CryptoTradingAgent, and
+personas: Foreman, Dreamer, CryptoTradingAgent, and
 WebDesignAgent.
 """
 
 import pytest
 
 from brikie.bricks.soul.base import SoulBrick
-from brikie.bricks.soul.sisyphus_orchestrator import SisyphusOrchestrator
+from brikie.bricks.soul.foreman import Foreman
 from brikie.bricks.soul.dreamer import Dreamer
 from brikie.bricks.soul.crypto_trading_agent import CryptoTradingAgent
 from brikie.bricks.soul.web_design_agent import WebDesignAgent
@@ -63,41 +63,41 @@ class TestSoulBrickABC:
 
 
 # ---------------------------------------------------------------------------
-# SisyphusOrchestrator
+# Foreman
 # ---------------------------------------------------------------------------
 
 
-class TestSisyphusOrchestrator:
-    """Verify SisyphusOrchestrator defaults and serialization."""
+class TestForeman:
+    """Verify Foreman defaults and serialization."""
 
     def test_default_name(self):
-        soul = SisyphusOrchestrator()
-        assert soul.name == "sisyphus_orchestrator"
+        soul = Foreman()
+        assert soul.name == "foreman"
 
     def test_default_allowed_tools(self):
-        soul = SisyphusOrchestrator()
+        soul = Foreman()
         assert soul.allowed_tools == ["*"]
 
     def test_default_strict_mode(self):
-        soul = SisyphusOrchestrator()
+        soul = Foreman()
         assert soul.behavioral_constraints["strict_mode"] is True
 
     def test_requires_lsp_validation(self):
-        soul = SisyphusOrchestrator()
+        soul = Foreman()
         assert soul.behavioral_constraints.get("requires_lsp_validation") is True
 
     def test_max_subagents_default(self):
-        soul = SisyphusOrchestrator()
+        soul = Foreman()
         assert soul.behavioral_constraints["max_subagents"] == 5
 
     def test_default_version(self):
-        soul = SisyphusOrchestrator()
+        soul = Foreman()
         assert soul.version == "1.0.0"
 
     def test_to_manifest(self):
-        soul = SisyphusOrchestrator()
+        soul = Foreman()
         manifest = soul.to_manifest()
-        assert manifest["name"] == "sisyphus_orchestrator"
+        assert manifest["name"] == "foreman"
         assert manifest["allowed_tools"] == ["*"]
         assert manifest["behavioral_constraints"]["strict_mode"] is True
         assert manifest["behavioral_constraints"]["requires_lsp_validation"] is True
@@ -107,15 +107,15 @@ class TestSisyphusOrchestrator:
 
     def test_from_manifest(self):
         data = {
-            "name": "sisyphus_orchestrator",
+            "name": "foreman",
             "system_prompt": "overridden",
             "allowed_tools": ["tool_a", "tool_b"],
             "behavioral_constraints": {"strict_mode": False, "max_subagents": 10},
             "description": "custom desc",
             "version": "2.0.0",
         }
-        soul = SisyphusOrchestrator.from_manifest(data)
-        assert soul.name == "sisyphus_orchestrator"
+        soul = Foreman.from_manifest(data)
+        assert soul.name == "foreman"
         assert soul.system_prompt == "overridden"
         assert soul.allowed_tools == ["tool_a", "tool_b"]
         assert soul.behavioral_constraints == {"strict_mode": False, "max_subagents": 10}
@@ -125,7 +125,7 @@ class TestSisyphusOrchestrator:
     def test_from_manifest_via_soulbrick_classmethod(self):
         """from_manifest should be callable on SoulBrick directly, returning the subclass type."""
         data = {
-            "name": "sisyphus_orchestrator",
+            "name": "foreman",
             "system_prompt": "",
             "allowed_tools": ["*"],
             "behavioral_constraints": {},
@@ -135,18 +135,18 @@ class TestSisyphusOrchestrator:
         soul = SoulBrick.from_manifest(data)
         # It will be a SoulBrick instance (the default) because SoulBrick
         # doesn't know about subclasses — but the call itself must not error.
-        assert soul.name == "sisyphus_orchestrator"
+        assert soul.name == "foreman"
 
     def test_custom_field_overrides(self):
-        soul = SisyphusOrchestrator(
-            name="custom_sisyphus",
+        soul = Foreman(
+            name="custom_foreman",
             system_prompt="custom",
             allowed_tools=["tool_x"],
             behavioral_constraints={"strict_mode": False},
             description="custom",
             version="3.0.0",
         )
-        assert soul.name == "custom_sisyphus"
+        assert soul.name == "custom_foreman"
         assert soul.system_prompt == "custom"
         assert soul.allowed_tools == ["tool_x"]
         assert soul.behavioral_constraints == {"strict_mode": False}
@@ -424,7 +424,7 @@ class TestSoulRoundTrip:
     @pytest.mark.parametrize(
         "soul_cls",
         [
-            SisyphusOrchestrator,
+            Foreman,
             Dreamer,
             CryptoTradingAgent,
             WebDesignAgent,

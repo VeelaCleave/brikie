@@ -1,6 +1,6 @@
 """Default system prompt used when no Soul Brick is seated.
 
-Phase C wires real Soul Bricks (Sisyphus, Dreamer, …) into the context
+Phase C wires real Soul Bricks (Foreman, Dreamer, …) into the context
 window; until then the Baseplate falls back to this neutral identity so
 the agent always has one.
 """

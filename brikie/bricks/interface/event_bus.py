@@ -160,7 +160,7 @@ class InternalEventBusBrick(InterfaceBrick):
             return
         event = BusEvent(
             event_type="orchestrator.output",
-            source_soul="sisyphus_orchestrator",
+            source_soul="foreman",
             target_soul="*",
             payload={"content": msg},
         )

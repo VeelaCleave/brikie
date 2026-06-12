@@ -18,9 +18,9 @@ venv/
 # Project internal
 .omo/
 
-# Distribution
-dist/
-build/
+# Distribution (anchored to repo root — brikie/bricks/build/ is source code!)
+/dist/
+/build/
 *.egg-info/
 brikie/bricks/memory/wiki/wiki_directory/
 

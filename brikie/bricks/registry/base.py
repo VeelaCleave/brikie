@@ -16,7 +16,7 @@ class BrickManifest:
     """Serialisable manifest describing a brick in the Kadeia registry.
 
     Attributes:
-        name: Canonical brick name (e.g. "sisyphus_orchestrator").
+        name: Canonical brick name (e.g. "foreman").
         version: Semantic version string (e.g. "1.0.0").
         type: Brick category — "soul", "tool", "provider", "interface", or "memory".
         description: Human-readable summary of the brick's purpose.

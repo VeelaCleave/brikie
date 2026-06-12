@@ -1,0 +1,17 @@
+{
+  "name": "default",
+  "description": "Default Brick Set: file tools + CloakBrowser web browsing + local deepseek-v4-flash",
+  "bricks": [
+    {
+      "brk": "BRK-200",
+      "config": {
+        "model": "deepseek-v4-flash-spark",
+        "base_url": "http://localhost:8000/v1",
+        "api_key": "not-needed"
+      }
+    },
+    {"brk": "BRK-300"},
+    {"brk": "BRK-410"},
+    {"brk": "BRK-420"}
+  ]
+}

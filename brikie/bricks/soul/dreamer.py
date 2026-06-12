@@ -2,7 +2,7 @@
 
 Analyzes system logs, identifies patterns, proposes novel features, and
 suggests architectural improvements. Highly creative and unconstrained
-by immediate practicalities — outputs proposals for the Sisyphus
+by immediate practicalities — outputs proposals for the Foreman
 orchestrator to evaluate.
 """
 
@@ -29,7 +29,7 @@ class Dreamer(SoulBrick):
             "Your purpose is to analyze system logs, identify patterns, propose "
             "novel features, and suggest architectural improvements. You are "
             "highly creative and unconstrained by immediate practicalities. You "
-            "output proposals for the Sisyphus orchestrator to evaluate."
+            "output proposals for the Foreman orchestrator to evaluate."
         )
     )
     allowed_tools: List[str] = field(

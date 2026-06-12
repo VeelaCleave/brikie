@@ -2,10 +2,17 @@
 
 Defines the ABCs that every Provider, Interface, and Tool Brick must implement.
 The BrickRegistry manages hot-swappable Brick instances by name and type.
+
+The kernel deliberately knows nothing about concrete brick categories
+beyond the three it must route between (Provider, Interface, Tool).
+Everything else — memory, logging, security, improvement — plugs in
+structurally: any registered object with a ``name`` and the lifecycle
+methods is a Brick, and the event loop discovers optional capabilities
+(hook callbacks, context builders) by duck typing.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Type, TypeVar
+from typing import Any, Dict, List, Protocol, Type, TypeVar, runtime_checkable
 
 from brikie.config.types import BrickState
 
@@ -127,12 +134,24 @@ class ToolBrick(ABC):
 # Brick Registry
 # ---------------------------------------------------------------------------
 
-# Import MemoryBrick and LoggingBrick from their modules.
-from brikie.bricks.logging.base import LoggingBrick
-from brikie.bricks.memory.memory_brick import MemoryBrick
+@runtime_checkable
+class Brick(Protocol):
+    """Structural type for anything seatable on the Baseplate.
 
-Brick = ProviderBrick | InterfaceBrick | ToolBrick | MemoryBrick | LoggingBrick
-BrickT = TypeVar("BrickT", bound=Brick)
+    A Brick is any object with a canonical ``name`` and async ``init`` /
+    ``shutdown`` lifecycle methods.  The kernel never imports concrete
+    brick categories; it accepts whatever fits this shape.
+    """
+
+    @property
+    def name(self) -> str: ...
+
+    async def init(self) -> None: ...
+
+    async def shutdown(self) -> None: ...
+
+
+BrickT = TypeVar("BrickT")
 
 
 class BrickRegistry:

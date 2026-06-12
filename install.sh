@@ -4,14 +4,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-echo "╔══════════════════════════════════════════════════════╗"
-echo "║     Brikie — Modular Agentic Harness                ║"
-echo "║     Baseplate Kernel Installation                   ║"
-echo "╚══════════════════════════════════════════════════════╝"
+echo ""
+echo "  ▀▄▀▄▀▄  b r i k i e  ▄▀▄▀▄▀"
+echo "  build your agent · brick by brick"
 echo ""
 
 PYTHON=""
-for cmd in python3.11 python3; do
+for cmd in python3.12 python3.11 python3; do
     if command -v "$cmd" &>/dev/null; then
         PYTHON="$cmd"
         break
@@ -24,43 +23,24 @@ if [ -z "$PYTHON" ]; then
 fi
 
 echo "  Python: $("$PYTHON" --version)"
-echo ""
 
 if [ ! -d .venv ]; then
     echo "  Creating virtual environment..."
     "$PYTHON" -m venv .venv
 fi
 
-if [ -f .venv/bin/activate ]; then
-    # shellcheck disable=SC1091
-    source .venv/bin/activate
-else
-    echo "ERROR: Virtual environment not found at .venv"
-    exit 1
-fi
+# shellcheck disable=SC1091
+source .venv/bin/activate
 
-pip install --quiet --upgrade pip setuptools wheel
+echo "  Installing the Baseplate kernel..."
+pip install --quiet --upgrade pip
 pip install --quiet -e ".[dev]"
-pip install --quiet httpx rich aiosqlite pydantic tiktoken PyYAML pytest pytest-asyncio
 
 echo "  Done."
-echo ""
 
-echo "  Available Build Sets:"
-for f in brikie/bricks/build/sets/*.json; do
-    name=$(basename "$f" .json)
-    desc=$("$PYTHON" -c "import json; print(json.load(open('$f')).get('description',''))" 2>/dev/null || echo "")
-    printf "    %-12s %s\n" "$name" "$desc"
-done
-echo ""
+# Hand over to the interactive brick picker.
+python3 -m brikie.install
 
-read -rp "  Select set [local]: " SET_NAME
-SET_NAME="${SET_NAME:-local}"
 echo ""
-
-echo "  Run brikie:"
-echo "    brikie --set \"$SET_NAME\""
-echo ""
-echo "  Or with virtual environment:"
-echo "    source .venv/bin/activate && brikie --set \"$SET_NAME\""
+echo "  (activate the environment first:  source .venv/bin/activate)"
 echo ""

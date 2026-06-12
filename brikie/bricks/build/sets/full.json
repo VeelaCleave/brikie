@@ -1,0 +1,25 @@
+{
+  "name": "full",
+  "description": "Default set plus tripartite memory, logging, security, and improvement bricks",
+  "bricks": [
+    {
+      "brk": "BRK-200",
+      "config": {
+        "model": "deepseek-v4-flash-spark",
+        "base_url": "http://localhost:8000/v1",
+        "api_key": "not-needed"
+      }
+    },
+    {"brk": "BRK-300"},
+    {"brk": "BRK-410"},
+    {"brk": "BRK-420"},
+    {"brk": "BRK-600"},
+    {"brk": "BRK-610"},
+    {"brk": "BRK-620"},
+    {"brk": "BRK-700"},
+    {"brk": "BRK-710"},
+    {"brk": "BRK-720"},
+    {"brk": "BRK-800"},
+    {"brk": "BRK-900"}
+  ]
+}
