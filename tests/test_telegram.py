@@ -210,3 +210,29 @@ class TestMultiInterfaceInput:
         await only.queue.put("hello")
         assert await loop._capture_input() == "hello"
         assert loop._input_tasks == {}
+
+
+class TestTypingIndicator:
+    async def test_busy_sends_typing_action(self, brick):
+        brick._chats.add(555)
+        brick.sent = []
+
+        async def fake_api(method, params):
+            brick.sent.append((method, params))
+            return []
+
+        brick._api = fake_api  # type: ignore
+        brick.set_busy(True)
+        await __import__("asyncio").sleep(0.05)
+        brick.set_busy(False)
+        actions = [p for m, p in brick.sent if m == "sendChatAction"]
+        assert actions and actions[0]["action"] == "typing"
+        assert actions[0]["chat_id"] == 555
+
+    async def test_busy_false_stops_task(self, brick):
+        async def fake_api(method, params):
+            return []
+        brick._api = fake_api  # type: ignore
+        brick.set_busy(True)
+        brick.set_busy(False)
+        assert brick._typing_task is None

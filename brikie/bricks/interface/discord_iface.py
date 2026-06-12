@@ -71,6 +71,7 @@ class DiscordBrick(InterfaceBrick):
         self._warned: Set[int] = set()
         self._client: Optional[Any] = None
         self._run_task: Optional[asyncio.Task] = None
+        self._typing_task: Optional[asyncio.Task] = None
 
     @property
     def name(self) -> str:
@@ -158,6 +159,9 @@ class DiscordBrick(InterfaceBrick):
                 logger.error("DiscordBrick gateway stopped: %s: %s", name, exc)
 
     async def shutdown(self) -> None:
+        if self._typing_task is not None:
+            self._typing_task.cancel()
+            self._typing_task = None
         if self._client is not None:
             try:
                 await self._client.close()
@@ -263,6 +267,35 @@ class DiscordBrick(InterfaceBrick):
 
     async def render_startup(self, info: Dict[str, Any]) -> None:
         return  # no channel known until someone messages
+
+    def set_busy(self, busy: bool, label: str = "thinking…") -> None:
+        """Show/hide Discord's typing indicator while the agent works.
+
+        The event loop calls this around every turn. ``channel.typing()``
+        keeps the "Bot is typing…" dots alive (auto-refreshed by
+        discord.py) until the task is cancelled.
+        """
+        if busy:
+            if self._typing_task is None or self._typing_task.done():
+                self._typing_task = asyncio.create_task(self._keep_typing())
+        elif self._typing_task is not None:
+            self._typing_task.cancel()
+            self._typing_task = None
+
+    async def _keep_typing(self) -> None:
+        """Hold the typing indicator on every active channel until cancelled."""
+        import contextlib
+
+        try:
+            async with contextlib.AsyncExitStack() as stack:
+                for channel in list(self._channels):
+                    try:
+                        await stack.enter_async_context(channel.typing())
+                    except Exception as exc:
+                        logger.debug("Discord typing failed: %s", exc)
+                await asyncio.Event().wait()  # until cancelled
+        except asyncio.CancelledError:
+            pass
 
     # ------------------------------------------------------------------
     # Discord plumbing

@@ -117,3 +117,28 @@ class TestLifecycle:
         monkeypatch.setenv("TEST_DISCORD_TOKEN", "abc.def.ghi")
         b = DiscordBrick(token="env:TEST_DISCORD_TOKEN")
         assert b._resolve_token() == "abc.def.ghi"
+
+
+class TestTypingIndicator:
+    async def test_set_busy_starts_and_stops_typing(self, brick, monkeypatch):
+        # avoid real channel.typing(); just prove the task lifecycle
+        async def fake_keep():
+            import asyncio
+            await asyncio.Event().wait()
+        monkeypatch.setattr(brick, "_keep_typing", fake_keep)
+
+        brick.set_busy(True)
+        assert brick._typing_task is not None and not brick._typing_task.done()
+        brick.set_busy(False)
+        assert brick._typing_task is None
+
+    async def test_set_busy_true_twice_is_idempotent(self, brick, monkeypatch):
+        async def fake_keep():
+            import asyncio
+            await asyncio.Event().wait()
+        monkeypatch.setattr(brick, "_keep_typing", fake_keep)
+        brick.set_busy(True)
+        first = brick._typing_task
+        brick.set_busy(True)
+        assert brick._typing_task is first
+        brick.set_busy(False)

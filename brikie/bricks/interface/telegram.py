@@ -70,6 +70,7 @@ class TelegramBrick(InterfaceBrick):
         self._offset = 0                   # getUpdates cursor
         self._client: Optional[httpx.AsyncClient] = None
         self._poll_task: Optional[asyncio.Task] = None
+        self._typing_task: Optional[asyncio.Task] = None
 
     @property
     def name(self) -> str:
@@ -111,6 +112,9 @@ class TelegramBrick(InterfaceBrick):
         await super().init()
 
     async def shutdown(self) -> None:
+        if self._typing_task is not None:
+            self._typing_task.cancel()
+            self._typing_task = None
         if self._poll_task is not None:
             self._poll_task.cancel()
             try:
@@ -236,6 +240,29 @@ class TelegramBrick(InterfaceBrick):
     async def render_startup(self, info: Dict[str, Any]) -> None:
         # No chats are known until someone messages; nothing to send yet.
         return
+
+    def set_busy(self, busy: bool, label: str = "thinking…") -> None:
+        """Show/hide Telegram's 'typing…' status while the agent works."""
+        if busy:
+            if self._typing_task is None or self._typing_task.done():
+                self._typing_task = asyncio.create_task(self._keep_typing())
+        elif self._typing_task is not None:
+            self._typing_task.cancel()
+            self._typing_task = None
+
+    async def _keep_typing(self) -> None:
+        """Re-send the 'typing' chat action (expires after ~5s) until cancelled."""
+        try:
+            while True:
+                for chat_id in list(self._chats):
+                    try:
+                        await self._api("sendChatAction",
+                                        {"chat_id": chat_id, "action": "typing"})
+                    except Exception as exc:
+                        logger.debug("Telegram typing failed: %s", exc)
+                await asyncio.sleep(4)
+        except asyncio.CancelledError:
+            pass
 
     # ------------------------------------------------------------------
     # Telegram API plumbing
