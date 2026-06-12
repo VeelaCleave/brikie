@@ -255,29 +255,39 @@ def render_index_html(registry_manifests: list[dict[str, Any]]) -> str:
     groups: list[str] = []
     for group, entries in CATALOG.items():
         # Provider presets are mutually exclusive → radios, not checkboxes.
+        # They're variants of one brick (BRK-200, the HTTP provider), so
+        # showing the BRK number seven times just reads as confusing
+        # duplication — suppress it for this group and explain once.
         radio = any(e.preset for e in entries)
         input_attrs = (
             'type="radio" name="provider"' if radio
             else 'type="checkbox" name="brick"'
         )
+        row_class = "brick provider-row" if radio else "brick"
         rows = "\n".join(
-            f'<label class="brick{" dev-brick" if e.dev else ""}">'
+            f'<label class="{row_class}{" dev-brick" if e.dev else ""}">'
             f'<input {input_attrs} '
             f'value="{html.escape(e.value)}"{" checked" if e.default else ""}>'
             f'<span class="check"></span>'
-            f'<span class="brk">{html.escape(e.brk)}</span>'
-            f'<span class="label">{html.escape(e.label)}'
+            + ("" if radio else f'<span class="brk">{html.escape(e.brk)}</span>')
+            + f'<span class="label">{html.escape(e.label)}'
             f'{" <em class=devtag>dev</em>" if e.dev else ""}</span>'
             f'<span class="blurb">{html.escape(e.blurb)}</span></label>'
             for e in entries
         )
+        note = (
+            '<p class="hint" style="margin:.2rem 0 .6rem">'
+            "One provider brick speaks to all of these — pick where your "
+            "model lives now; you can switch models any time in-app with "
+            "<code>/model &lt;id&gt;</code>.</p>"
+        ) if radio else ""
         # A group that is entirely dev bricks hides as a whole.
         fieldset_class = (
             ' class="dev-brick"' if all(e.dev for e in entries) else ""
         )
         groups.append(
             f'<fieldset{fieldset_class}><legend>{html.escape(group)}</legend>'
-            f'{rows}</fieldset>'
+            f'{note}{rows}</fieldset>'
         )
 
     if registry_manifests:
@@ -436,6 +446,7 @@ legend { color: var(--soft); font-weight: bold; padding: 0 .6rem; }
   gap: .6rem; align-items: baseline;
   padding: .45rem .5rem; cursor: pointer; border-radius: 4px;
 }
+.brick.provider-row { grid-template-columns: 22px auto 1fr; }
 .brick:hover { background: var(--panel2); }
 .brick input { display: none; }
 .check {

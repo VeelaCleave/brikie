@@ -255,3 +255,32 @@ class TestGitHubBrick:
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
         brick = GitHubBrick(repo="o/r")
         assert "Authorization" not in brick._headers()
+
+
+class TestModelCommand:
+    async def _loop_with_provider(self):
+        from brikie.bricks.provider.http_provider import HTTPProvider
+        registry = BrickRegistry()
+        provider = HTTPProvider(model="gpt-4o", base_url="http://x/v1")
+        registry.register(provider)
+        loop = EventLoop(
+            registry=registry, state=StateManager(), hooks=HookDispatcher()
+        )
+        return loop, provider
+
+    async def test_model_switch_changes_provider_model(self):
+        loop, provider = await self._loop_with_provider()
+        handled = await loop._handle_command("/model gpt-4o-mini")
+        assert handled is True
+        assert provider.model == "gpt-4o-mini"
+
+    async def test_model_show_does_not_change(self):
+        loop, provider = await self._loop_with_provider()
+        await loop._handle_command("/model")
+        assert provider.model == "gpt-4o"
+
+    async def test_model_command_no_provider_safe(self):
+        loop = EventLoop(
+            registry=BrickRegistry(), state=StateManager(), hooks=HookDispatcher()
+        )
+        assert await loop._handle_command("/model claude") is True

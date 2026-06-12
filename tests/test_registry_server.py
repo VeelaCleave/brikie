@@ -538,3 +538,14 @@ class TestDockerInstallMode:
         page = render_index_html([])
         assert 'id="isolated"' in page
         assert "run isolated (Docker)" in page
+
+
+class TestProviderPickerClarity:
+    def test_provider_rows_omit_brk_number(self):
+        from brikie.server.website import render_index_html
+        page = render_index_html([])
+        # The provider note explains the one-brick-many-providers model
+        assert "One provider brick speaks to all of these" in page
+        assert "/model" in page
+        # Provider rows carry the provider-row class (tighter grid, no BRK)
+        assert "brick provider-row" in page

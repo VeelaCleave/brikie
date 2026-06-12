@@ -47,6 +47,7 @@ _HELP_TEXT = """\
 /help    show this help
 /bricks  list seated bricks
 /clear   clear screen and conversation history
+/model   show or switch the model: /model to show, /model <id> to switch
 /focus   steer the Dreamer: /focus <directive>, /focus to show, /focus clear
 /afk     enter autonomous AFK mode: /afk [cycles|inf] (default 3)
 /exit    quit brikie (also /quit, Ctrl-C, Ctrl-D)\
@@ -352,6 +353,9 @@ class EventLoop:
                 if hasattr(iface, "clear_screen"):
                     iface.clear_screen()
             return True
+        if cmd == "/model" or cmd.startswith("/model "):
+            await self._handle_model_command(user_text.strip()[len("/model"):].strip())
+            return True
         if cmd == "/focus" or cmd.startswith("/focus "):
             # Preserve the operator's casing — only the command word is
             # matched lowercase.
@@ -395,6 +399,44 @@ class EventLoop:
                     await self._enter_afk_mode(cycles=cycles)
             return True
         return False
+
+    async def _handle_model_command(self, arg: str) -> None:
+        """Show the active model, or switch it live across providers.
+
+        The model id rides in each request payload, so a switch takes
+        effect on the very next turn with no re-initialization.
+        """
+        providers = self._registry.get_all(ProviderBrick)
+        if not providers:
+            await self._emit_info("model", "No Provider Brick is seated.")
+            return
+
+        if not arg:
+            lines = [
+                f"{getattr(p, 'model', '?')}  ({getattr(p, 'base_url', '')})"
+                for p in providers
+            ]
+            await self._emit_info(
+                "model",
+                "\n".join(lines) + "\n\nswitch with  /model <id>",
+            )
+            return
+
+        switched = []
+        for provider in providers:
+            if hasattr(provider, "configure"):
+                provider.configure(model=arg)
+                switched.append(provider.name)
+        if switched:
+            for iface in self._registry.get_all(InterfaceBrick):
+                if hasattr(iface, "set_provider_info"):
+                    base = getattr(providers[0], "base_url", "")
+                    iface.set_provider_info(arg, base)
+            await self._emit_info("model", f"now using {arg}.")
+        else:
+            await self._emit_info(
+                "model", "The seated provider can't switch models at runtime."
+            )
 
     @staticmethod
     def _parse_afk_cycles(cmd: str) -> Optional[int]:
