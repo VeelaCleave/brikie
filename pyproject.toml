@@ -35,6 +35,9 @@ dev = [
     "mypy>=1.8.0",
     "ruff>=0.4.0",
 ]
+discord = [
+    "discord.py>=2.3.0",
+]
 memory = [
     "chromadb>=0.4.0",
     "sentence-transformers>=2.2.0",
