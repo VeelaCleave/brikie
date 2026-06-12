@@ -37,6 +37,7 @@ BRICK_INDEX: Dict[str, str] = {
     "BRK-410": "brikie.bricks.tool.file_tools.ShellToolBrick",
     "BRK-420": "brikie.bricks.tool.cloakbrowser.CloakBrowserBrick",
     "BRK-430": "brikie.bricks.tool.github_tools.GitHubBrick",
+    "BRK-440": "brikie.bricks.tool.mcp_client.MCPClientBrick",
     "BRK-450": "brikie.bricks.registry.installer.RegistryInstallerBrick",
 
     # ── Soul Bricks (500-599) ─────────────────────────────────────────

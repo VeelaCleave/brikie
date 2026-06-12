@@ -50,6 +50,7 @@ BRICK_NUMBERS: Dict[str, str] = {
     "ShellToolBrick": "BRK-410",
     "CloakBrowserBrick": "BRK-420",
     "GitHubBrick": "BRK-430",
+    "MCPClientBrick": "BRK-440",
     "RegistryInstallerBrick": "BRK-450",
 
     # ── Soul Bricks (500-599) ─────────────────────────────────────────

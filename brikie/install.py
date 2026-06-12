@@ -67,6 +67,7 @@ CATALOG: Dict[str, List[CatalogEntry]] = {
         CatalogEntry("BRK-410", "File Tools", "bash, read/write file, glob, grep, LSP diagnostics", default=True),
         CatalogEntry("BRK-420", "CloakBrowser", "Stealth web browsing that passes bot detection", default=True),
         CatalogEntry("BRK-430", "GitHub", "Read repo issues; feeds the Dreamer triaged community requests", dev=True),
+        CatalogEntry("BRK-440", "MCP Client", "Connect any Model Context Protocol server\u2019s tools to your agent"),
         CatalogEntry("BRK-450", "Registry Installer", "Fetch and install bricks from the central registry"),
     ],
     "Memory Bricks": [
