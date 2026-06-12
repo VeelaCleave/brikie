@@ -12,11 +12,8 @@ Brick) — the eventual brikie.co website generates custom installers from
 brick selections, Ninite-style. Out of the box, the default Brick Set is:
 CLI + local deepseek provider + file tools + CloakBrowser web browsing.
 
-`design.md` is the **historical blueprint** — useful for intent and the
-memory/AFK architecture, but it predates the build: it still says
-"Sisyphus" and "kadeia.co" (both superseded, see Naming) and its 5-phase
-plan is complete history, not a roadmap. When this file and `design.md`
-disagree, this file wins.
+An internal historical blueprint (`design.md`, untracked) predates the
+build; where any older document and this file disagree, this file wins.
 
 ## Current roadmap
 
@@ -92,10 +89,10 @@ disagree, this file wins.
 ## Naming
 
 - **Foreman** (BRK-500) — site-boss orchestrator. **Dreamer** (BRK-510) —
-  proposal generator. **Mason** — Phase C executor sub-agents. The name
-  *Sisyphus* is retired; do not reintroduce it outside `design.md`.
-- The central registry is **brikie.co** (the `kadeia_*` brick names are
-  legacy pending the Phase D rename).
+  proposal generator. **Mason** — executor sub-agents. The name
+  *Sisyphus* is retired; do not reintroduce it.
+- The central registry is **brikie.co** — live at https://brikie.co
+  (the old *kadeia* naming is fully retired).
 
 ## Definition of Done
 

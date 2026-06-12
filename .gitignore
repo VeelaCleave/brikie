@@ -28,3 +28,8 @@ brikie/bricks/memory/wiki/wiki_directory/
 ~/.brikie/logs/
 *.db
 *.db.bak*
+
+# Internal working docs — not part of the public repo
+/handover-prompt.md
+/design.md
+/docs/
