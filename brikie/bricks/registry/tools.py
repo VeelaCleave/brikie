@@ -1,8 +1,8 @@
 """OpenAI-compatible tool schemas for the brikie.co registry.
 
-Provides ``get_registry_tools()`` returning five tool schemas that let an
+Provides ``get_registry_tools()`` returning six tool schemas that let an
 LLM search the brick registry, list available bricks, install them, author
-brand-new bricks from source, and uninstall bricks again.
+brand-new bricks from source, publish them, and uninstall bricks again.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ def get_registry_tools() -> list[dict[str, Any]]:
         - **registry_install** — Download, verify, and seat a brick.
         - **registry_list** — List available bricks, optionally by type.
         - **registry_create_brick** — Author a new brick from source and seat it.
+        - **registry_publish** — Push an authored brick to the registry.
         - **registry_uninstall** — Unseat a brick installed this session.
 
     Returns:
@@ -122,6 +123,27 @@ def get_registry_tools() -> list[dict[str, Any]]:
                         },
                     },
                     "required": ["name", "type", "source_code"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "registry_publish",
+                "description": "Publish a brick you authored with registry_create_brick to the brikie.co registry so other agents can install it. The registry computes the canonical checksum and download URL.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Name of the locally authored brick to publish.",
+                        },
+                        "version": {
+                            "type": "string",
+                            "description": "Specific local version to publish. Defaults to the highest version present locally.",
+                        },
+                    },
+                    "required": ["name"],
                 },
             },
         },

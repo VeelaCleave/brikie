@@ -129,13 +129,14 @@ class TestRegistryInstallerBrickStructure:
     def test_name_property(self):
         assert RegistryInstallerBrick().name == "registry_installer"
 
-    def test_class_tools_has_five_schemas(self):
+    def test_class_tools_has_six_schemas(self):
         names = [t["function"]["name"] for t in RegistryInstallerBrick.tools]
         assert names == [
             "registry_search",
             "registry_install",
             "registry_list",
             "registry_create_brick",
+            "registry_publish",
             "registry_uninstall",
         ]
 

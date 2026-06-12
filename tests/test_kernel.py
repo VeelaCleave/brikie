@@ -258,3 +258,57 @@ class TestBrickRegistry:
         brick_registry.register(_TestProvider())
         brick_registry.clear()
         assert len(brick_registry._bricks) == 0
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Tool error containment
+# ──────────────────────────────────────────────────────────────────────
+
+
+class _ExplodingToolBrick(ToolBrick):
+    """A tool brick whose execute() raises an arbitrary exception."""
+
+    BRICK_NUMBER = "BRK-9998"
+    tools = [{
+        "type": "function",
+        "function": {"name": "explode", "parameters": {"type": "object"}},
+    }]
+
+    @property
+    def name(self) -> str:
+        return "exploder"
+
+    @property
+    def state(self) -> BrickState:
+        return BrickState.ACTIVE
+
+    async def init(self) -> None:
+        pass
+
+    async def shutdown(self) -> None:
+        pass
+
+    async def execute(self, name: str, args: Dict[str, Any]) -> Any:
+        raise RuntimeError("kaboom")
+
+
+class TestToolErrorContainment:
+    """One failing tool call must never crash the event loop (AGENTS.md)."""
+
+    async def test_exception_is_settled_as_structured_error(self):
+        from brikie.config.types import ToolCall
+        from brikie.kernel.event_loop import EventLoop
+
+        registry = BrickRegistry()
+        registry.register(_ExplodingToolBrick())
+        loop = EventLoop(
+            registry=registry, state=StateManager(), hooks=HookDispatcher()
+        )
+
+        calls = await loop.process_tool_calls(
+            [ToolCall(name="explode", args={}, tool_call_id="t1")]
+        )
+
+        assert calls[0].result is not None
+        assert "RuntimeError" in calls[0].result
+        assert "kaboom" in calls[0].result

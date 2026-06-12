@@ -1,16 +1,17 @@
 """RegistryInstallerBrick — Tool Brick for brikie.co registry operations.
 
-Provides five tools that let an agent discover, install, author, and
-remove bricks at runtime:
+Provides six tools that let an agent discover, install, author, publish,
+and remove bricks at runtime:
 
 - registry_search       — search the brikie.co registry
 - registry_list         — list available bricks
 - registry_install      — download, verify, and seat a brick
 - registry_create_brick — author a new brick from source and seat it
+- registry_publish      — push an authored brick to the registry
 - registry_uninstall    — unseat a brick installed this session
 
-This is the heart of the Phase D vision: the agent can grow (and prune)
-its own brick stack while running.
+This is the heart of the Phase D/E vision: the agent can grow (and prune)
+its own brick stack while running, and share what it built.
 """
 
 from __future__ import annotations
@@ -82,7 +83,7 @@ class RegistryInstallerBrick(ToolBrick):
         Args:
             name: Tool name (registry_search, registry_list,
                   registry_install, registry_create_brick,
-                  registry_uninstall).
+                  registry_publish, registry_uninstall).
             args: Tool arguments.
 
         Returns:
@@ -99,6 +100,8 @@ class RegistryInstallerBrick(ToolBrick):
             return await self._list(args)
         elif name == "registry_create_brick":
             return await self._create_brick(args)
+        elif name == "registry_publish":
+            return await self._publish(args)
         elif name == "registry_uninstall":
             return await self._uninstall(args)
         else:
@@ -257,6 +260,50 @@ class RegistryInstallerBrick(ToolBrick):
             "seated": seated,
         }
 
+    async def _publish(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Push a locally authored/installed brick to the registry.
+
+        Reads the manifest sidecar and source written by
+        ``registry_create_brick`` from the install directory and POSTs
+        them to the registry's publish endpoint. The sidecar is then
+        rewritten with the canonical manifest the server returned
+        (registry download_url + server-computed checksum).
+        """
+        name = args.get("name", "")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("registry_publish: 'name' must be a non-empty string")
+        name = name.strip().lower().replace(" ", "_").replace("-", "_")
+
+        version = args.get("version")
+        if version is not None and not isinstance(version, str):
+            raise ValueError("registry_publish: 'version' must be a string or None")
+
+        manifest_path = self._find_local_manifest(name, version)
+        manifest = BrickManifest.from_dict(json.loads(manifest_path.read_text()))
+
+        source_path = self._install_dir / f"{manifest.name}-{manifest.version}.py"
+        if not source_path.is_file():
+            raise ValueError(
+                f"registry_publish: source file missing for '{manifest.name}' "
+                f"v{manifest.version} (expected {source_path})"
+            )
+
+        published = await self._client.publish(manifest, source_path.read_text())
+
+        # The server is the authority now — keep the local sidecar canonical.
+        manifest_path.write_text(json.dumps(published.to_dict(), indent=2))
+        self._installed[published.name] = published
+
+        logger.info("Published brick '%s' v%s", published.name, published.version)
+        return {
+            "name": published.name,
+            "version": published.version,
+            "type": published.type,
+            "checksum": published.checksum,
+            "download_url": published.download_url,
+            "published": True,
+        }
+
     async def _uninstall(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Unseat a brick installed this session, optionally deleting files."""
         name = args.get("name", "")
@@ -298,6 +345,45 @@ class RegistryInstallerBrick(ToolBrick):
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _find_local_manifest(self, name: str, version: Optional[str]) -> Path:
+        """Locate a brick's manifest sidecar in the install directory.
+
+        Args:
+            name: Normalized brick name.
+            version: Specific version, or None for the highest local one.
+
+        Raises:
+            ValueError: When no matching sidecar exists.
+        """
+        if version is not None:
+            path = self._install_dir / f"{name}-{version}.manifest.json"
+            if not path.is_file():
+                raise ValueError(
+                    f"registry_publish: no local manifest for '{name}' v{version} "
+                    f"— author it first with registry_create_brick"
+                )
+            return path
+
+        candidates = sorted(
+            self._install_dir.glob(f"{name}-*.manifest.json"),
+            key=lambda p: self._version_key_from_sidecar(name, p),
+        )
+        if not candidates:
+            raise ValueError(
+                f"registry_publish: no local manifest for '{name}' "
+                f"— author it first with registry_create_brick"
+            )
+        return candidates[-1]
+
+    @staticmethod
+    def _version_key_from_sidecar(name: str, path: Path) -> tuple:
+        """Sortable version tuple parsed from '{name}-{version}.manifest.json'."""
+        version = path.name[len(name) + 1 : -len(".manifest.json")]
+        try:
+            return tuple(int(part) for part in version.split("."))
+        except ValueError:
+            return (0,)
 
     @staticmethod
     async def _init_brick(brick: Any) -> None:  # noqa: ANN401

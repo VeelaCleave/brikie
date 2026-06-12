@@ -339,9 +339,11 @@ class EventLoop:
 
     async def _agent_loop(self) -> None:
         """Iterate provider calls and tool executions until the model answers."""
-        tool_schemas = self._collect_tool_schemas()
-
         for _step in range(MAX_AGENT_STEPS):
+            # Re-collect every round, not just per turn: a brick seated by
+            # registry_install/registry_create_brick mid-turn must be
+            # callable in the very next model round.
+            tool_schemas = self._collect_tool_schemas()
             messages = await self._build_provider_messages()
 
             self._set_busy(True, "thinking…")
@@ -710,12 +712,26 @@ class EventLoop:
                         tc.result = str(result)
                         executed = True
                         break
-                    except (KeyError, ValueError) as exc:
+                    except KeyError as exc:
+                        # The brick advertises the schema but doesn't
+                        # dispatch it — let another brick claim the call.
                         logger.warning(
-                            "Tool %s execute failed on %s: %s",
+                            "Tool %s not dispatched by %s: %s",
                             tc.name, tool_brick.name, exc,
                         )
                         continue
+                    except Exception as exc:
+                        # The brick matched and ran but failed. Settle the
+                        # call with a structured error so the model can
+                        # react — one bad tool call must never crash the
+                        # loop (AGENTS.md tool contract).
+                        logger.warning(
+                            "Tool %s failed on %s: %s",
+                            tc.name, tool_brick.name, exc,
+                        )
+                        tc.result = f"Tool error ({type(exc).__name__}): {exc}"
+                        executed = True
+                        break
 
             if not executed:
                 tc.result = f"No ToolBrick found for tool '{tc.name}'"

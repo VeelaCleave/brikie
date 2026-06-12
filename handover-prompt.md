@@ -1,84 +1,102 @@
 # 🧱 Brikie — Handover Prompt
 
-## Session Context (June 12, 2026 — Session 3)
+## Session Context (June 12, 2026 — Session 4)
 
 You are the next Brikie session. Here's the state of the world:
 
-### Phases A, B, C, D ✅ All Done
+### Phases A–E ✅ All Done
 - Ground-up CLI rewrite, working agent loop, soul prompt injection (A)
 - Kernel purity, souls-as-config, Build Sets, Ninite installer prototype (B)
 - Foreman (BRK-500) / Dreamer (BRK-510) / Mason (BRK-540) full AFK loop (C)
-- **brikie.co registry** — kadeia fully renamed, real dynamic install,
-  agent-authored bricks, uninstall (D)
-- 405 tests all green, ruff clean repo-wide
+- brikie.co registry client — real dynamic install, agent-authored bricks (D)
+- **brikie.co server side** — registry server, publish, web installer (E)
+- 435 tests all green, ruff clean repo-wide
 
-### 🔥 What Happened This Session (Session 3)
+### 🔥 What Happened This Session (Session 4 — Phase E)
 
-**1. Memory extraction quality fixed (commit `cc0c276`)**
-The entity extractor was classifying any capitalized word as a person
-(42 rows of "let", 28 of "the"). Fixes:
-- 200+ word stop list + min length 3 in `entity_extractor.py`
-- Sentence-start heuristic: a lone capitalized word starting a sentence
-  is not a person (known cost: real names at sentence start are skipped)
-- Most-specific-type-first dedup — "Redis" can't be tool AND person
-- Bare verbs ("decided", "completed") are no longer entities; they still
-  steer hall classification
-- Triples: leading articles stripped, pronoun subjects dropped, fixed the
-  'creates' pattern storing its own verb as the object
-- `upsert_entity` / `upsert_triple` now actually upsert (case-insensitive
-  name match; 'concept' upgrades to specific types, never downgrades)
-- `search_entities` SQL was broken (string literal never concatenated)
-- Spatial hierarchy now populated: `intercept_message` creates wing/room/
-  hall regions and maps entities (`ensure_region` + `map_entity`)
-- One-time cleanup of polluted `mempalace.db`: 307 → ~10 real entities
-  (backup at `mempalace.db.bak-20260612`, gitignored)
+**1. The brikie.co server exists (`brikie/server/`, stdlib-only)**
+Run with `python3 -m brikie.server --port 8321 --data-dir ~/.brikie/registry`
+(optional `--base-url https://brikie.co` for production; otherwise download
+URLs derive from the request Host header).
+- `store.py` — `RegistryStore`: filesystem layout
+  `{data_dir}/{name}/{version}/{manifest.json,source.py}`; validates
+  name/version/type, syntax-checks source, computes sha256, 409 on
+  re-publish of an existing version; numeric (not lexicographic) latest-
+  version resolution. Manifests store *relative* download_urls; the
+  serving layer absolutizes them.
+- `registry_server.py` — `RegistryServer` (ThreadingHTTPServer): routes
+  match `RegistryClient` exactly — `/bricks/index.json`,
+  `/bricks/search?q=`, `/bricks/{name}[/{ver}]/manifest.json`,
+  `/bricks/{name}/{ver}/source.py`, `POST /bricks/publish`. Embeddable
+  (`start()`/`shutdown()`, `port=0` for tests) or blocking
+  (`serve_forever()`).
+- `website.py` — the Ninite part: brick-picker HTML at `/` (brick-orange
+  theme, reuses `CATALOG` from `brikie/install.py` so web and local
+  installer can't drift), `GET /buildset.json?bricks=BRK-..&name=..`,
+  `GET /install.sh?...` (POSIX script: pip-installs brikie from GitHub if
+  missing, writes the Build Set into the package sets dir). Minimum-stack
+  validation mirrors `BuildLoader.validate_minimum_stack`.
 
-**2. Phase D shipped (this commit)**
-- `kadeia_registry.py` / `kadeia_installer.py` deleted; replaced by
-  `registry_client.py` (`RegistryClient`, `RegistryError`) and
-  `installer.py` (`RegistryInstallerBrick`, BRK-450, ctor param is
-  `registry` so BuildLoader auto-injects the kernel registry — the old
-  `brick_registry` param name meant it was NEVER wired)
-- Real downloads: httpx fetch + sha256 checksum verification + source
-  written to `~/.brikie/bricks/` with a JSON receipt
-- `load_brick_from_file`: importlib spec-from-file dynamic load, finds
-  the BRICK_NUMBER class, injects registry if accepted, registers, inits
-- **Five tools**: registry_search, registry_install, registry_list,
-  `registry_create_brick` (agent authors a brick from source — syntax
-  check, manifest sidecar for future publishing, seat + init), and
-  `registry_uninstall` (shutdown + unregister + optional file deletion)
-- BRK-450 seated in the `full` build set
-- Live-verified: agent authored a dice brick via registry_create_brick,
-  then called its `roll_dice` tool on the next turn (works because
-  `_collect_tool_schemas()` re-queries the registry every turn)
+**2. `registry_publish` — the sixth BRK-450 tool**
+- `RegistryClient.publish(manifest, source_code)` POSTs to
+  `{registry}/publish`; server is the authority on checksum/download_url.
+- The installer brick reads the manifest sidecar + source that
+  `registry_create_brick` wrote, publishes, then rewrites the local
+  sidecar with the canonical manifest. Version defaults to the highest
+  local one.
+
+**3. Two kernel bugs found by live testing (the loop, not unit tests)**
+- `process_tool_calls` only caught `(KeyError, ValueError)` — a
+  RegistryError (or anything an agent-authored brick raises) **crashed
+  the whole event loop**. Now: KeyError still falls through to the next
+  brick (schema advertised but not dispatched); any other exception
+  settles the call as `Tool error (Type): msg` so the model can react.
+  Live-verified: duplicate publish → model received the 409 and explained
+  the fix (bump the version).
+- Tool schemas were collected once per *user turn*, so a brick installed
+  mid-turn wasn't callable until the next prompt — the model then
+  **fabricated** the tool result. Now `_collect_tool_schemas()` runs every
+  model round: search → install → call the new tool works in one turn.
+
+**4. Live verification (all real, local vLLM deepseek-v4-flash)**
+- `curl -fsSL "http://127.0.0.1:8321/install.sh?bricks=BRK-300,BRK-200,BRK-410&name=webmini" | sh`
+  → build set written → `brikie --set webmini` boots and answers.
+- Agent A authored `compliment` v0.1.0 via registry_create_brick, then
+  registry_publish → checksum + registry download_url returned.
+- Fresh agent B (empty install dir): registry_search → registry_install
+  (checksum-verified download) → called `get_compliment(name='Veela')`
+  in the same turn → "your mortar consistency is absolutely legendary!"
 
 ### 🧠 Known Issues / Technical Debt
-- Sentence-initial real names ("Veela asked...") are skipped by the
-  person heuristic — acceptable noise/recall trade-off, revisit if needed
-- Triple extractor still regex-based; recall is modest
-- WikiBrick auto-extract requires ≥200 chars with headings; docs dir is a
-  temp dir that doesn't persist between sessions
-- Entity types limited to 6 hardcoded values (schema CHECK constraint)
-- Spatial tunnels/drawers exist in schema but nothing maps that deep yet
-- registry_install needs a live registry server — brikie.co doesn't exist
-  yet, so only create/uninstall are exercisable end-to-end today
+- brikie.co the *domain* isn't deployed — the server runs anywhere, but
+  DEFAULT_REGISTRY_URL still points at the not-yet-live https://brikie.co
+- No auth on `POST /bricks/publish` — fine on localhost, needed before
+  any public deployment (token header would do)
+- Published `tool_schemas` in manifests are empty for agent-authored
+  bricks (the sidecar doesn't capture the class-level `tools` attr)
+- Sentence-initial real names ("Veela asked...") skipped by the person
+  heuristic; triple extractor recall still modest (regex-based)
+- WikiBrick docs dir doesn't persist between sessions
+- Mason has no hard sandboxing yet (SandboxSecurityBrick exists, unused
+  by Masons)
 
 ### 🧪 Test / Run Commands
 ```bash
-python3 -m pytest tests/ -q        # expect 405 passing
+python3 -m pytest tests/ -q        # expect 435 passing
 ruff check brikie/ tests/          # expect clean
+python3 -m brikie.server --port 8321 --data-dir /tmp/reg   # the registry
 echo "What bricks am I running?" | python3 -m brikie --set full
 ```
+To point BRK-450 at a local registry, give it config in a build set:
+`{"brk": "BRK-450", "config": {"registry_url": "http://127.0.0.1:8321/bricks"}}`
 
-### 🎯 What's Next — Phase E (brikie.co server side)
-1. Registry server: index.json, per-brick manifests, search endpoint —
-   even a static-file prototype unblocks registry_install end-to-end
-2. `registry_publish` tool: push an authored brick (manifest sidecar is
-   already written for exactly this)
-3. Website installer generation (the Ninite vision): brikie.co page that
-   emits a custom Build Set JSON + install.sh from chosen bricks
-4. Soft ideas: Mason hard sandboxing (SandboxSecurityBrick), persistent
-   wiki docs dir, LLM-based entity extraction as an optional brick
+### 🎯 What's Next — Phase F (hardening & depth)
+1. Deploy the server at brikie.co (it's stdlib-only — any box works);
+   add publish auth first
+2. Mason hard sandboxing via SandboxSecurityBrick
+3. Persistent wiki docs dir
+4. LLM-based entity extraction as an optional memory brick
+5. Capture `tool_schemas` into create_brick's manifest sidecar
 
 ### 🚀 The Vision
 > "Build your agent · brick by brick"

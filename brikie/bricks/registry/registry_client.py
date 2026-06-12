@@ -93,6 +93,31 @@ class RegistryClient:
         data = await self._get_json(url)
         return [BrickManifest.from_dict(item) for item in data]
 
+    async def publish(
+        self, manifest: BrickManifest, source_code: str
+    ) -> BrickManifest:
+        """Publish a brick (manifest + source) to the registry.
+
+        The server is the authority on ``checksum`` and ``download_url`` —
+        whatever this manifest carries for those fields, the returned
+        manifest holds the canonical registry values.
+
+        Args:
+            manifest: Manifest describing the brick to publish.
+            source_code: Complete Python source of the brick module.
+
+        Returns:
+            The canonical manifest as stored by the registry.
+
+        Raises:
+            RegistryError: On HTTP failure, validation rejection, or a
+                version that is already published.
+        """
+        url = f"{self._registry_url}/publish"
+        payload = {"manifest": manifest.to_dict(), "source_code": source_code}
+        data = await self._post_json(url, payload)
+        return BrickManifest.from_dict(data)
+
     async def download_brick(
         self, manifest: BrickManifest, target_dir: str
     ) -> str:
@@ -297,6 +322,41 @@ class RegistryClient:
                 return response.json()
             except httpx.HTTPStatusError as exc:
                 msg = f"Registry HTTP {exc.response.status_code} for {url}"
+                logger.error(msg)
+                raise RegistryError(msg) from exc
+            except httpx.RequestError as exc:
+                msg = f"Registry request failed for {url}: {exc}"
+                logger.error(msg)
+                raise RegistryError(msg) from exc
+
+    async def _post_json(self, url: str, payload: Any) -> Any:
+        """Perform an HTTP POST with a JSON body and parse the JSON response.
+
+        Args:
+            url: Fully qualified URL to post to.
+            payload: JSON-serialisable request body.
+
+        Returns:
+            Parsed JSON payload.
+
+        Raises:
+            RegistryError: On HTTP failure (the server's ``error`` field is
+                surfaced when present).
+        """
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            try:
+                response = await client.post(url, json=payload)
+                response.raise_for_status()
+                return response.json()
+            except httpx.HTTPStatusError as exc:
+                detail = ""
+                try:
+                    detail = exc.response.json().get("error", "")
+                except (ValueError, AttributeError):
+                    pass
+                msg = f"Registry HTTP {exc.response.status_code} for {url}"
+                if detail:
+                    msg = f"{msg}: {detail}"
                 logger.error(msg)
                 raise RegistryError(msg) from exc
             except httpx.RequestError as exc:

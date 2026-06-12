@@ -26,7 +26,8 @@ disagree, this file wins.
 | B | Kernel purity, souls-as-config, build sets, installer prototype | ✅ done |
 | C | Real LLM-driven Dreamer ⇄ Foreman AFK negotiation, Mason executor sub-agents, soul prompt wiring | ✅ done |
 | D | brikie.co registry (kadeia renamed), real dynamic brick install (download + checksum + seat), agent-authored bricks (`registry_create_brick`), uninstall | ✅ done |
-| E | brikie.co server side: publish endpoint, real registry index, website installer generation | next |
+| E | brikie.co server side (`brikie/server/`): registry index + publish endpoint, `registry_publish` tool, Ninite installer generation (web page → buildset.json → `curl \| sh`) | ✅ done |
+| F | Hardening & depth: Mason hard sandboxing, persistent wiki docs dir, LLM-based entity extraction brick, brikie.co deployment | next |
 
 ## Architecture — the rules that are not negotiable
 
@@ -68,6 +69,9 @@ disagree, this file wins.
 5. Tool bricks: expose OpenAI-format schemas via a `tools` class
    attribute and dispatch in `execute(name, args)`. Tool failures return
    structured error payloads — never let one tool call crash the loop.
+   The kernel backstops this (`process_tool_calls` settles any exception
+   as a `Tool error (...)` result), but don't rely on it: agent-authored
+   bricks go through the same path, so keep your own errors descriptive.
 6. Write tests, then **verify it live** (see Definition of Done).
 
 ## Interface & provider contracts
