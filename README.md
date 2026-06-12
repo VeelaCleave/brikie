@@ -28,6 +28,23 @@ agent from your phone. Re-run the whole setup any time with:
 brikie config
 ```
 
+## Chat from your phone (background service)
+
+Connecting Telegram or Discord during `brikie config` installs a
+background **gateway service** — no terminal to keep open. Close the
+window; your bot stays online (and restarts on failure / reboot).
+Manage it with:
+
+```sh
+brikie gateway status   # is it running?
+brikie gateway logs     # recent output
+brikie gateway stop     # take it offline
+brikie gateway restart  # bring it back
+```
+
+On Linux it's a `systemd --user` unit; elsewhere a detached process.
+The first person to message the bot becomes its owner.
+
 Want to choose your bricks up front instead? Compose a custom stack at
 [brikie.co](https://brikie.co) and run the one-liner it gives you:
 
