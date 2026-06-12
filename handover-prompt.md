@@ -10,7 +10,7 @@ You are the next Brikie session. Here's the state of the world:
 - Foreman (BRK-500) / Dreamer (BRK-510) / Mason (BRK-540) full AFK loop (C)
 - brikie.co registry client — real dynamic install, agent-authored bricks (D)
 - **brikie.co server side** — registry server, publish, web installer (E)
-- 435 tests all green, ruff clean repo-wide
+- 442 tests all green, ruff clean repo-wide
 
 ### 🔥 What Happened This Session (Session 4 — Phase E)
 
@@ -68,10 +68,8 @@ URLs derive from the request Host header).
   in the same turn → "your mortar consistency is absolutely legendary!"
 
 ### 🧠 Known Issues / Technical Debt
-- brikie.co the *domain* isn't deployed — the server runs anywhere, but
-  DEFAULT_REGISTRY_URL still points at the not-yet-live https://brikie.co
-- No auth on `POST /bricks/publish` — fine on localhost, needed before
-  any public deployment (token header would do)
+- ~~brikie.co not deployed~~ → LIVE as of this session (see Deployment)
+- ~~No publish auth~~ → shipped (Bearer token, commit 145ba98)
 - Published `tool_schemas` in manifests are empty for agent-authored
   bricks (the sidecar doesn't capture the class-level `tools` attr)
 - Sentence-initial real names ("Veela asked...") skipped by the person
@@ -82,7 +80,7 @@ URLs derive from the request Host header).
 
 ### 🧪 Test / Run Commands
 ```bash
-python3 -m pytest tests/ -q        # expect 435 passing
+python3 -m pytest tests/ -q        # expect 442 passing
 ruff check brikie/ tests/          # expect clean
 python3 -m brikie.server --port 8321 --data-dir /tmp/reg   # the registry
 echo "What bricks am I running?" | python3 -m brikie --set full
