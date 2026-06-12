@@ -1,81 +1,102 @@
 # 🧱 Brikie — Handover Prompt
 
-## Session Context (June 12, 2026)
+## Session Context (June 12, 2026 — Session 2)
 
 You are the next Brikie session. Here's what happened before you woke up:
 
-### Phase A & B ✅ Done
+### Phase A, B, C ✅ All Done
 - Ground-up CLI rewrite, working agent loop, soul prompt injection
 - Kernel purity — kernel imports nothing from `brikie.bricks`
-- Ninite-style installer with Build Set system (JSON manifests)
+- Ninite-style installer with Build Set system
 - BRK-NNN numbering for all 30 bricks
-- Foreman (BRK-500, renamed from Sisyphus), Dreamer (BRK-510), Mason (BRK-540)
+- Foreman (BRK-500), Dreamer (BRK-510), Mason (BRK-540) with full AFK loop
+- AFKProtocolEngine — Dreamer proposes → Foreman approves/rejects → Mason builds
+- 387 tests all green (up from 371)
 
-### Phase C ✅ SHIPPED (commit `267953c`)
-- **SoulActor** (`brikie/kernel/soul_actor.py`) — binds any Soul persona to any Provider Brick for LLM-driven completions
-- **DreamerActor** — reads diagnostics, generates structured JSON proposals via LLM
-- **ForemanActor** — full event-bus service loop evaluating proposals (approve/defer/reject)
-- **Mason** (BRK-540) — scope-locked builder sub-agent that executes approved jobs with tool bricks
-- **AFKProtocolEngine upgrade** — `dreamer_propose` callback wires real LLM dreaming, `on_stage` for live narration, timeout-configurable evaluation, diagnostic context builder pulls session stats + recent events
-- **Event loop** — spawns ForemanActor background task, runs Mason sub-agent loops, pre-settled tool calls so security bricks (firewall) stay in the pipeline
-- **CLI** — `render_afk_event()` with color-coded dreamer/foreman/mason output, `/afk N` and `/afk inf` parsing
-- **default.json** — upgraded to full 12-brick stack:
-  - BRK-200 (HTTP provider), BRK-300 (CLI), BRK-410 (file tools), BRK-420 (CloakBrowser)
-  - BRK-600 (LCM), BRK-610 (MemPalace), BRK-620 (Wiki)
-  - BRK-700 (TokenLogger), BRK-710 (ToolTracer), BRK-720 (Diagnostics)
-  - BRK-800 (CommandFirewall), BRK-900 (AutoFixer)
-- **371 tests all green**
+### 🔥 What Happened This Session (Session 2)
 
-### 🔥 What Happened This Session
-1. I (the previous Brikie) tested the web browser and researched **Hermes Agent** vs Brikie
-2. You showed me the full repo at `/home/veela/brikie` with its 30 numbered bricks, 74 Python files, 12k LOC, 35 commits
-3. Claude ran out of tokens mid-Phase-C — "this is why local models are better" 😄
-4. I updated `default.json` to the full stack and **booted it live** — 12 bricks seated, agent self-explored, LCM/MemPalace/Wiki all active
-5. I committed Phase C as `267953c "Pre-breaking stuff baseline"` and pushed
+The entire session was a **memory subsystem triage and repair** effort:
 
-### 🎯 What's Next
-- **Phase C is done** — the Dreamer → Foreman → Mason loop works. The `/afk 1` / `/afk inf` command is live.
-- **Phase D** is next: brikie.co registry, dynamic brick install, agent-authored bricks
-- The default set now boots with memory + logging + security + improvement bricks
-- Local deepseek-v4-flash-spark provider runs at `localhost:8000/v1`
+1. **You reported** `sqlite3.OperationalError: no such table: dag_nodes`
+2. **Root cause found:** `VersionedConnectionPool.initialize()` would write its schema blindly into whatever file it was given. If any code path pointed `LcmStore` at `mempalace.db`, it would silently create `dag_nodes`, `sessions`, `messages` etc. there — corrupting the database.
+3. **Defensive fix applied:** Added a `__init_subclass__`-based `_KNOWN_DB_FILENAMES` registry to `VersionedConnectionPool`. On `initialize()`, if the target file's basename matches another pool's `DB_FILENAME`, it raises `SchemaIsolationError`. Temp files for tests are allowed freely.
+4. **Other fixes this session:**
+   - `_unwrap_hook_data()` helper — peels HookEvent envelopes in callbacks
+   - `_intercept_user_message()` — user messages now persist into all 3 memory bricks
+   - `_build_memory_blob()` normalized across all 3 brick shapes (LCM summaries/tail, MemPalace entities/triples, Wiki pages)
+   - `get_recent_entities()` added to MemPalace for context injection
+   - HookEvent unwrapping in `diagnostics.py` and `token_logger.py`
+   - `edit_file` tool added to file_tools — surgical oldString→newString replacement
+   - MAX_AGENT_STEPS raised from 25 to 500
+5. **Comprehensive triage doc saved:** `docs/memory-triage-2026-06-12.md`
+6. **All 387 tests pass** — verified clean after all fixes
+7. **Commit:** `b01f391` — `fix: memory schema isolation guard + tripartite memory blob normalization`
 
-### ⚡ Future sessions — stuff to try right away:
-1. **Run `/afk 1`** and watch the Dreamer dream → Foreman decides → Mason builds
-2. **Try dangerous shell commands** — test the CommandFirewall (BRK-800)
-3. **Stress MemPalace** — chat for 20+ turns, restart, and see if memories persist
-4. **Test LCM expansion** — fill up context, trigger compaction, expand back
-5. **Feed the Dreamer broken diagnostics** and see if the Foreman catches it
-6. **Try the `afk` build set** — `python3 -m brikie --set afk` loads souls too
+### 🧠 Known Issues / Technical Debt
+
+**High Priority:**
+- **Entity extractor is too aggressive** — 252 entities, ~80% noise (stop words like "let", "the", "your" classified as `person` type). Needs a stop-word filter, minimum length check, and proper `entity_type` classification instead of the current regex heuristics. The MemPalace knowledge graph is currently polluted with garbage entities.
+- **11 relationships extracted** — very low. The triple extractor is barely firing because it requires explicit `subject-predicate-object` patterns. Most useful triples aren't being captured.
+- **No entity deduplication** — "Redis" appears 3+ times as separate entities (`person`, `tool`, `concept`) with different IDs. `upsert_entity` doesn't actually upsert — it always creates a new row.
+- **Wikipedia database filename mismatches** — some tests reference `test_wiki.db` while others reference `wiki.db`. Not a bug currently but a naming inconsistency.
+- **`_ALLOWED_FILENAMES` was the first approach for isolation, then swapped for `__init_subclass__`.** The old attribute name still appears in commit history if anyone searches for it.
+
+**Medium:**
+- `WikiBrick` auto-extract requires ≥200 chars with Markdown headings — too aggressive for normal conversation
+- MemPalace entity types are limited to 6 hardcoded types (`person`, `project`, `tool`, `concept`, `decision`, `milestone`)
+- Spatial hierarchy (wing → room → hall → tunnel → drawer) is fully implemented in schema but no code creates spatial mappings yet
+- `WikiBrick` docs directory is a temp dir that doesn't persist between sessions
+
+### 💾 Database State (after this session)
+All three databases restored and verified clean:
+
+| DB | Tables | Entity Count |
+|---|---|---|
+| `lcm.db` | sessions, messages, **dag_nodes**, token_budgets, compaction_log | 5 messages in tail |
+| `mempalace.db` | entities, triples, spatial_map, spatial_regions | 252 entities (needs cleanup), 11 triples |
+| `wiki.db` | pages, links, tags | ~9 auto-extracted pages |
+
+Schema isolation guard is active — you **cannot** accidentally write LCM schema into mempalace.db anymore.
 
 ### 📁 Key Files
+
 | File | Purpose |
 |---|---|
 | `AGENTS.md` | Working contract — read this first |
 | `design.md` | Historical architecture blueprint |
+| `docs/memory-triage-2026-06-12.md` | Full triage document from this session |
 | `brikie/kernel/event_loop.py` | The main agent loop + AFK wiring |
 | `brikie/kernel/soul_actor.py` | DreamerActor, ForemanActor classes |
-| `brikie/kernel/afk_protocol.py` | AFKProtocolEngine — the negotiation loop |
-| `brikie/bricks/soul/foreman.py` | Foreman persona dataclass |
-| `brikie/bricks/soul/dreamer.py` | Dreamer persona dataclass |
-| `brikie/bricks/soul/mason.py` | Mason persona dataclass (BRK-540) |
-| `brikie/bricks/build/sets/default.json` | Current default build set (12 bricks) |
+| `brikie/kernel/afk_protocol.py` | AFKProtocolEngine — negotiation loop |
+| `brikie/bricks/memory/sqlite_pool.py` | Schema isolation guard lives here |
+| `brikie/bricks/memory/mempalace/entity_extractor.py` | The noisy entity extractor — needs a stop-word filter |
+| `brikie/bricks/build/sets/default.json` | Current build set (15 bricks + 3 souls) |
 | `brikie/bricks/build/sets/afk.json` | AFK build set (with souls) |
-| `brikie/config/brick_numbers.py` | All 30 brick registrations |
 
 ### 🧪 Test Command
 ```bash
 python3 -m pytest tests/ -q
 ```
-Expect 371 passing.
+Expect **387 passing**.
 
 ### 🔧 Run Command
 ```bash
 echo "What bricks am I running?" | python3 -m brikie --set default
 ```
 
+### 🎯 What's Next / Immediate Tasks
+
+1. **🔴 Clean up the entity extractor** — add stop-word list, minimum entity length (≥3 chars), proper type classification. This is the highest-impact fix for MemPalace quality.
+2. **🟡 Fix upsert_entity** — currently INSERTs always, never UPDATEs. Should match by normalized name.
+3. **🟡 Plugin the spatial hierarchy** — the schema supports `wing → room → hall → tunnel → drawer` but nothing populates it yet.
+4. **🟢 Run `/afk 1`** and watch the Dreamer → Foreman → Mason loop live
+5. **🟢 Test the CommandFirewall** — try dangerous shell commands
+6. **🟢 Fill up LCM context** — trigger compaction, expand back with `lcm_expand`
+7. **🟢 Try the `afk` build set** — `python3 -m brikie --set afk`
+
 ### 🚀 The Vision
 > "Build your agent · brick by brick"
-> 
+>
 > Phase D = brikie.co registry + dynamic brick install + agent-authored bricks
-> 
+>
 > The crown isn't stolen — it's built. 🧱👑
