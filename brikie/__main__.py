@@ -59,6 +59,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Rerun the first-run provider setup wizard",
     )
     parser.add_argument(
+        "--continue",
+        dest="resume",
+        action="store_true",
+        help="Resume the previous conversation (needs a memory brick, "
+             "e.g. BRK-600)",
+    )
+    parser.add_argument(
         "--preset",
         default=None,
         metavar="NAME",
@@ -140,6 +147,7 @@ async def main() -> None:
         afk_manager=afk_manager,
         system_prompt=DEFAULT_SYSTEM_PROMPT,
         souls=build.souls,
+        resume=args.resume,
     )
 
     try:

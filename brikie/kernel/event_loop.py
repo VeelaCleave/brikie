@@ -82,6 +82,7 @@ class EventLoop:
         afk_manager: "AFKManager | None" = None,
         system_prompt: Optional[str] = None,
         souls: Optional[Dict[str, Any]] = None,
+        resume: bool = False,
     ) -> None:
         self._registry = registry
         self._state = state
@@ -90,6 +91,8 @@ class EventLoop:
         self._afk_manager = afk_manager
         self._system_prompt = system_prompt
         self._souls = souls or {}
+        self._resume = resume
+        self._resumed_count = 0
         self._afk_watchers: List[Any] = []
         self._tokens_in = 0
         self._tokens_out = 0
@@ -110,6 +113,12 @@ class EventLoop:
             logger.warning("No ProviderBrick registered.")
 
         await self._announce_startup()
+        if self._resumed_count:
+            await self._emit_info(
+                "resumed",
+                f"continuing your previous conversation "
+                f"({self._resumed_count} messages restored).",
+            )
 
         try:
             while True:
@@ -134,6 +143,9 @@ class EventLoop:
         self._register_memory_hooks()
         await self._register_brick_hooks()
 
+        if self._resume:
+            await self._restore_history()
+
     async def _phase_shutdown(self) -> None:
         """Gracefully shut down every brick (HTTP clients, DBs, TUI…)."""
         for task in self._input_tasks.values():
@@ -144,6 +156,42 @@ class EventLoop:
                 await brick.shutdown()
             except Exception:
                 logger.exception("Error shutting down brick %s", brick.name)
+
+    async def _restore_history(self) -> None:
+        """Repopulate the conversation from a memory brick (``--continue``).
+
+        Probes for any brick exposing the duck-typed ``load_history``;
+        the first non-empty result becomes the in-memory history so the
+        next turn literally continues the prior conversation. Older,
+        compacted context still arrives via the memory blob.
+        """
+        session_id = await self._state.get("session_id", "default")
+        for brick in self._registry._bricks.values():
+            if not hasattr(brick, "load_history"):
+                continue
+            try:
+                history = await brick.load_history(session_id)
+            except Exception:
+                logger.exception("Resume from %s failed", getattr(brick, "name", "?"))
+                continue
+            restored = [
+                Message(
+                    role=m.get("role", "user"),
+                    content=m.get("content", "") or "",
+                    tool_call_id=m.get("tool_call_id"),
+                )
+                for m in (history or [])
+                if m.get("role") and m.get("content")
+            ]
+            if restored:
+                self._message_history = restored
+                self._resumed_count = len(restored)
+                logger.info(
+                    "Resumed %d message(s) from %s.",
+                    len(restored), getattr(brick, "name", "memory"),
+                )
+                return
+        logger.info("Nothing to resume — starting a fresh conversation.")
 
     async def _announce_startup(self) -> None:
         """Give interfaces a boot summary once everything is warm."""

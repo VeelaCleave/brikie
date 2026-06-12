@@ -31,3 +31,11 @@ class LcmBrick(MemoryBrick):
 
     async def build_context(self, session_id: str) -> Dict[str, Any]:
         return await self._store.get_active_context(session_id)
+
+    async def load_history(self, session_id: str) -> list:
+        """Resumable conversation history: verbatim non-compacted messages.
+
+        Duck-typed capability the event loop probes when ``--continue``
+        is given — returns ``[{role, content, tool_call_id}, ...]``.
+        """
+        return await self._store.get_active_messages(session_id)

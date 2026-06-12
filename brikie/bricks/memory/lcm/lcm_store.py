@@ -205,6 +205,33 @@ class LcmStore:
                 })
         return {"summaries": summary_list, "tail": tail_list, "total_tokens": 0, "budget": {}}
 
+    async def get_active_messages(self, session_id: str) -> list:
+        """Return non-compacted messages in order — the resumable tail.
+
+        Older turns already live in the DAG summaries (surfaced via
+        ``get_active_context``); these are the verbatim recent messages a
+        ``--continue`` run replays as real conversation history.
+        """
+        rows = await self._pool._execute(
+            'SELECT role, content, tool_call_id FROM messages '
+            'WHERE session_id = ? AND is_compacted = 0 ORDER BY "index" ASC',
+            (session_id,),
+            fetch="all",
+        )
+        return [
+            {"role": r[0], "content": r[1], "tool_call_id": r[2]}
+            for r in (rows or [])
+        ]
+
+    async def has_session(self, session_id: str) -> bool:
+        """True when any message exists for *session_id*."""
+        row = await self._pool._execute(
+            "SELECT 1 FROM messages WHERE session_id = ? LIMIT 1",
+            (session_id,),
+            fetch="one",
+        )
+        return row is not None
+
     async def expand(self, session_id: str, start_index: int, end_index: int) -> list:
         messages = await self._pool._execute(
             'SELECT id, "index", role, content, tool_call_id, token_count, is_compacted FROM messages WHERE session_id = ? AND "index" >= ? AND "index" <= ? ORDER BY "index" ASC',
