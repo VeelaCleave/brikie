@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 
 from brikie.server.registry_server import DEFAULT_PORT, RegistryServer
@@ -33,6 +34,12 @@ def main(argv: list[str] | None = None) -> int:
         help="public base URL for download links (e.g. https://brikie.co); "
              "derived from the request Host header when omitted",
     )
+    parser.add_argument(
+        "--publish-token", default=os.environ.get("BRIKIE_PUBLISH_TOKEN"),
+        help="bearer token required on POST /bricks/publish "
+             "(default: $BRIKIE_PUBLISH_TOKEN; unset = open publishing, "
+             "dev only)",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -40,12 +47,17 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     server = RegistryServer(
-        data_dir=args.data_dir, host=args.host, port=args.port, base_url=args.base_url
+        data_dir=args.data_dir,
+        host=args.host,
+        port=args.port,
+        base_url=args.base_url,
+        publish_token=args.publish_token,
     )
     print("▀▄▀▄▀▄  brikie.co registry  ▄▀▄▀▄▀")
     print(f"  registry : {server.url}")
     print(f"  website  : http://{args.host}:{server.port}/")
     print(f"  data dir : {server.store.data_dir}")
+    print(f"  publish  : {'token-protected' if args.publish_token else 'OPEN (dev only)'}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

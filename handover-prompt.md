@@ -91,12 +91,39 @@ To point BRK-450 at a local registry, give it config in a build set:
 `{"brk": "BRK-450", "config": {"registry_url": "http://127.0.0.1:8321/bricks"}}`
 
 ### 🎯 What's Next — Phase F (hardening & depth)
-1. Deploy the server at brikie.co (it's stdlib-only — any box works);
-   add publish auth first
-2. Mason hard sandboxing via SandboxSecurityBrick
-3. Persistent wiki docs dir
-4. LLM-based entity extraction as an optional memory brick
-5. Capture `tool_schemas` into create_brick's manifest sidecar
+
+**Deployment (Veela is buying brikie.co + a VPS right now — expect
+credentials early next session):**
+1. Add auth to `POST /bricks/publish` (token header) — REQUIRED before
+   the registry is public; everything else about the server is ready
+2. Deploy: DNS A record → Ubuntu 24.04 VPS → Caddy for HTTPS →
+   systemd unit running `python3 -m brikie.server --base-url
+   https://brikie.co --data-dir /var/lib/brikie/registry`
+
+**Steerable Dreamer + GitHub flywheel (design agreed with Veela this
+session — build in this order):**
+3. Operator focus: `focus` field on the Dreamer soul manifest (build set
+   config) + a `/focus <text>` runtime command (StateManager); prepended
+   to `DreamerActor.propose()`'s prompt
+4. Dream Sources as a duck-typed capability: any registered brick with
+   `dream_context() -> str` contributes a section to
+   `_build_dream_context()` in afk_protocol.py (currently hardwired to
+   DiagnosticsCollector only). Diagnostics becomes the first source.
+5. GitHubBrick (400-block tool brick): issue/PR tools via `gh` or
+   httpx+token, AND a dream source mining open issues. Add `source`
+   field to the Proposal dataclass (provenance: "diagnostics" |
+   "github#42" | "operator-focus") so Foreman can prioritize and Mason
+   PRs can reference issues.
+   ⚠ SAFETY (agreed): only mine issues carrying a maintainer-applied
+   label (e.g. `dreamer-approved`) — raw public issue text is a prompt-
+   injection surface. Masons branch + PR only, never push master.
+   Mason hard sandboxing (6) is a prerequisite for PR-creating Masons.
+
+**Backlog:**
+6. Mason hard sandboxing via SandboxSecurityBrick
+7. Persistent wiki docs dir
+8. LLM-based entity extraction as an optional memory brick
+9. Capture `tool_schemas` into create_brick's manifest sidecar
 
 ### 🚀 The Vision
 > "Build your agent · brick by brick"

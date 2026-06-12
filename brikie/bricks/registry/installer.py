@@ -50,6 +50,8 @@ class RegistryInstallerBrick(ToolBrick):
         registry: The local BrickRegistry to seat installed bricks into.
                   (Named ``registry`` so BuildLoader auto-injects it.)
         install_dir: Directory where downloaded/authored brick source lives.
+        publish_token: Bearer token for registry_publish (falls back to the
+                  BRIKIE_PUBLISH_TOKEN environment variable).
     """
 
     tools: List[Dict[str, Any]] = get_registry_tools()
@@ -59,10 +61,11 @@ class RegistryInstallerBrick(ToolBrick):
         registry_url: str = DEFAULT_REGISTRY_URL,
         registry: Optional[BrickRegistry] = None,
         install_dir: str = DEFAULT_INSTALL_DIR,
+        publish_token: Optional[str] = None,
     ) -> None:
         super().__init__()
         self._name = "registry_installer"
-        self._client = RegistryClient(registry_url)
+        self._client = RegistryClient(registry_url, publish_token=publish_token)
         self._registry = registry
         self._install_dir = Path(install_dir).expanduser()
         self._installed: Dict[str, BrickManifest] = {}

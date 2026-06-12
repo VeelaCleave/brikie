@@ -19,6 +19,7 @@ plus the Ninite-style installer generator:
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import threading
@@ -41,16 +42,21 @@ DEFAULT_PORT = 8321
 
 
 class _RegistryHTTPServer(ThreadingHTTPServer):
-    """ThreadingHTTPServer carrying the store and base URL for handlers."""
+    """ThreadingHTTPServer carrying the store, base URL, and publish token."""
 
     daemon_threads = True
 
     def __init__(
-        self, address: tuple[str, int], store: RegistryStore, base_url: str | None
+        self,
+        address: tuple[str, int],
+        store: RegistryStore,
+        base_url: str | None,
+        publish_token: str | None,
     ) -> None:
         super().__init__(address, _Handler)
         self.store = store
         self.base_url = base_url
+        self.publish_token = publish_token
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -124,6 +130,13 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json({"error": "not found"}, status=404)
 
     def _handle_publish(self) -> None:
+        if not self._publish_authorized():
+            self._send_json(
+                {"error": "unauthorized — publishing requires a valid token "
+                          "(Authorization: Bearer <token>)"},
+                status=401,
+            )
+            return
         length = int(self.headers.get("Content-Length", 0))
         if length <= 0:
             raise StoreError("Empty request body")
@@ -139,6 +152,15 @@ class _Handler(BaseHTTPRequestHandler):
         )
         logger.info("Published %s v%s", stored["name"], stored["version"])
         self._send_json(self._absolutize(stored), status=201)
+
+    def _publish_authorized(self) -> bool:
+        """True when no token is configured (dev mode) or the header matches."""
+        token = self.server.publish_token
+        if not token:
+            return True
+        auth = self.headers.get("Authorization", "")
+        supplied = auth.removeprefix("Bearer ").strip()
+        return hmac.compare_digest(supplied, token)
 
     @staticmethod
     def _buildset_from_query(query: dict[str, list[str]]) -> dict[str, Any]:
@@ -186,6 +208,9 @@ class RegistryServer:
         port: Bind port; 0 picks an ephemeral port (useful in tests).
         base_url: Public base URL for download links. When None it is
             derived from each request's Host header.
+        publish_token: When set, POST /bricks/publish requires
+            ``Authorization: Bearer <token>``. Unset means open publishing
+            — acceptable only for local development.
     """
 
     def __init__(
@@ -194,9 +219,12 @@ class RegistryServer:
         host: str = "127.0.0.1",
         port: int = DEFAULT_PORT,
         base_url: str | None = None,
+        publish_token: str | None = None,
     ) -> None:
         self._store = RegistryStore(data_dir)
-        self._http = _RegistryHTTPServer((host, port), self._store, base_url)
+        self._http = _RegistryHTTPServer(
+            (host, port), self._store, base_url, publish_token
+        )
         self._thread: threading.Thread | None = None
 
     @property

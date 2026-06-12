@@ -346,3 +346,86 @@ class TestAuthorPublishInstallRoundTrip:
         await installer.execute("registry_publish", {"name": "greeter"})
         with pytest.raises(RegistryError, match="already published"):
             await installer.execute("registry_publish", {"name": "greeter"})
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Publish authentication
+# ──────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def auth_server(tmp_path):
+    srv = RegistryServer(
+        data_dir=tmp_path / "registry", port=0, publish_token="sekrit-token"
+    )
+    srv.start()
+    yield srv
+    srv.shutdown()
+
+
+class TestPublishAuth:
+    async def test_publish_without_token_is_401(self, auth_server):
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{auth_server.url}/publish",
+                json={"manifest": _manifest(), "source_code": GREETER_SOURCE},
+            )
+        assert resp.status_code == 401
+        assert "unauthorized" in resp.json()["error"]
+
+    async def test_publish_with_wrong_token_is_401(self, auth_server):
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{auth_server.url}/publish",
+                json={"manifest": _manifest(), "source_code": GREETER_SOURCE},
+                headers={"Authorization": "Bearer wrong"},
+            )
+        assert resp.status_code == 401
+
+    async def test_publish_with_token_succeeds(self, auth_server):
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{auth_server.url}/publish",
+                json={"manifest": _manifest(), "source_code": GREETER_SOURCE},
+                headers={"Authorization": "Bearer sekrit-token"},
+            )
+        assert resp.status_code == 201
+
+    async def test_reads_stay_open_without_token(self, auth_server):
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(f"{auth_server.url}/index.json")
+        assert resp.status_code == 200
+
+    async def test_client_sends_token(self, auth_server):
+        from brikie.bricks.registry.base import BrickManifest
+
+        client = RegistryClient(auth_server.url, publish_token="sekrit-token")
+        published = await client.publish(
+            BrickManifest.from_dict({**_manifest(), "download_url": ""}),
+            GREETER_SOURCE,
+        )
+        assert published.checksum.startswith("sha256:")
+
+    async def test_client_without_token_raises_401(self, auth_server, monkeypatch):
+        from brikie.bricks.registry.base import BrickManifest
+
+        monkeypatch.delenv("BRIKIE_PUBLISH_TOKEN", raising=False)
+        client = RegistryClient(auth_server.url)
+        with pytest.raises(RegistryError, match="401"):
+            await client.publish(
+                BrickManifest.from_dict({**_manifest(), "download_url": ""}),
+                GREETER_SOURCE,
+            )
+
+    async def test_installer_brick_passes_token_through(self, auth_server, tmp_path):
+        installer = RegistryInstallerBrick(
+            registry_url=auth_server.url,
+            registry=BrickRegistry(),
+            install_dir=str(tmp_path / "a"),
+            publish_token="sekrit-token",
+        )
+        await installer.execute("registry_create_brick", {
+            "name": "greeter", "type": "tool", "source_code": GREETER_SOURCE,
+        })
+        result = await installer.execute("registry_publish", {"name": "greeter"})
+        assert result["published"] is True

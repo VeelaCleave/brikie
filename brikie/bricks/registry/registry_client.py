@@ -13,6 +13,7 @@ import importlib
 import importlib.util
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -39,10 +40,17 @@ class RegistryClient:
 
     Args:
         registry_url: Base URL of the brick registry.
+        publish_token: Bearer token sent on publish requests. Falls back
+            to the BRIKIE_PUBLISH_TOKEN environment variable.
     """
 
-    def __init__(self, registry_url: str = DEFAULT_REGISTRY_URL) -> None:
+    def __init__(
+        self,
+        registry_url: str = DEFAULT_REGISTRY_URL,
+        publish_token: str | None = None,
+    ) -> None:
         self._registry_url = registry_url.rstrip("/")
+        self._publish_token = publish_token or os.environ.get("BRIKIE_PUBLISH_TOKEN")
 
     # ------------------------------------------------------------------
     # Public API
@@ -115,7 +123,10 @@ class RegistryClient:
         """
         url = f"{self._registry_url}/publish"
         payload = {"manifest": manifest.to_dict(), "source_code": source_code}
-        data = await self._post_json(url, payload)
+        headers = {}
+        if self._publish_token:
+            headers["Authorization"] = f"Bearer {self._publish_token}"
+        data = await self._post_json(url, payload, headers=headers)
         return BrickManifest.from_dict(data)
 
     async def download_brick(
@@ -329,12 +340,15 @@ class RegistryClient:
                 logger.error(msg)
                 raise RegistryError(msg) from exc
 
-    async def _post_json(self, url: str, payload: Any) -> Any:
+    async def _post_json(
+        self, url: str, payload: Any, headers: dict[str, str] | None = None
+    ) -> Any:
         """Perform an HTTP POST with a JSON body and parse the JSON response.
 
         Args:
             url: Fully qualified URL to post to.
             payload: JSON-serialisable request body.
+            headers: Optional extra request headers.
 
         Returns:
             Parsed JSON payload.
@@ -345,7 +359,7 @@ class RegistryClient:
         """
         async with httpx.AsyncClient(timeout=30.0) as client:
             try:
-                response = await client.post(url, json=payload)
+                response = await client.post(url, json=payload, headers=headers)
                 response.raise_for_status()
                 return response.json()
             except httpx.HTTPStatusError as exc:
