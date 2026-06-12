@@ -47,6 +47,7 @@ _HELP_TEXT = """\
 /help    show this help
 /bricks  list seated bricks
 /clear   clear screen and conversation history
+/focus   steer the Dreamer: /focus <directive>, /focus to show, /focus clear
 /afk     enter autonomous AFK mode: /afk [cycles|inf] (default 3)
 /exit    quit brikie (also /quit, Ctrl-C, Ctrl-D)\
 """
@@ -298,6 +299,29 @@ class EventLoop:
                 if hasattr(iface, "clear_screen"):
                     iface.clear_screen()
             return True
+        if cmd == "/focus" or cmd.startswith("/focus "):
+            # Preserve the operator's casing — only the command word is
+            # matched lowercase.
+            directive = user_text.strip()[len("/focus"):].strip()
+            if not directive:
+                current = await self._state.get("dreamer_focus", "")
+                soul_focus = getattr(self._souls.get("dreamer"), "focus", "")
+                shown = current or soul_focus
+                await self._emit_info(
+                    "focus",
+                    f"current focus: {shown}" if shown
+                    else "no focus set — the Dreamer free-associates. "
+                         "Set one with /focus <directive>.",
+                )
+            elif directive.lower() == "clear":
+                await self._state.set("dreamer_focus", "")
+                await self._emit_info("focus", "focus cleared.")
+            else:
+                await self._state.set("dreamer_focus", directive)
+                await self._emit_info(
+                    "focus", f"the Dreamer will now focus on: {directive}"
+                )
+            return True
         if cmd == "/afk" or cmd.startswith("/afk "):
             missing = [s for s in ("dreamer", "foreman") if s not in self._souls]
             if self._afk_manager is None or missing:
@@ -476,6 +500,10 @@ class EventLoop:
              if hasattr(b, "get_session_stats") and hasattr(b, "get_last_n_events")),
             None,
         )
+        async def current_focus() -> str:
+            stored = await self._state.get("dreamer_focus", "")
+            return stored or getattr(dreamer_soul, "focus", "")
+
         engine = AFKProtocolEngine(
             event_bus=bus,
             dreamer_soul=dreamer_soul,
@@ -485,6 +513,11 @@ class EventLoop:
             dreamer_propose=dreamer.propose,
             on_stage=self._emit_afk,
             evaluation_timeout=120.0,
+            dream_sources=lambda: [
+                b for b in self._registry._bricks.values()
+                if hasattr(b, "dream_context")
+            ],
+            get_focus=current_focus,
         )
 
         try:

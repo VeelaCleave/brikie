@@ -356,6 +356,42 @@ class DiagnosticsCollectorBrick(LoggingBrick):
             self._accumulate_entry(stats, entry)
         return stats
 
+    async def dream_context(self) -> str:
+        """Digest telemetry into a prompt-sized report (Dream Source).
+
+        Any brick exposing this duck-typed method contributes a section
+        to the Dreamer's context during AFK mode; diagnostics is the
+        canonical first source.
+        """
+        parts: list = []
+        try:
+            stats = await self.get_session_stats()
+            total_ops = stats.tool_success_count + stats.tool_failure_count
+            parts.append(
+                "Session stats: "
+                f"{stats.total_llm_calls} LLM calls, "
+                f"{total_ops} tool calls "
+                f"({stats.tool_failure_count} failed), "
+                f"avg tool latency {stats.avg_tool_latency_ms:.0f}ms, "
+                f"token cost ${stats.token_cost:.4f}."
+            )
+        except Exception as exc:
+            parts.append(f"Session stats unavailable: {exc}")
+
+        try:
+            events = await self.get_last_n_events(n=15)
+            if events:
+                lines = []
+                for e in events:
+                    etype = getattr(e, "event_type", "?")
+                    payload = str(getattr(e, "payload", ""))[:120]
+                    lines.append(f"- {etype}: {payload}")
+                parts.append("Recent events:\n" + "\n".join(lines))
+        except Exception as exc:
+            parts.append(f"Recent events unavailable: {exc}")
+
+        return "\n\n".join(parts)
+
     # ── Internal helpers ─────────────────────────────────────────────
 
     def _update_windows(self, entry: LogEntry) -> None:

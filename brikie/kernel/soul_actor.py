@@ -113,10 +113,13 @@ class DreamerActor(SoulActor):
             "capabilities, fixes for observed failures, efficiency gains, or "
             "quality-of-life features. Each proposal must be small enough "
             "for a single builder agent to complete with shell and file "
-            "tools.\n\n"
+            "tools. When a proposal addresses an item from a listed source "
+            "(e.g. a GitHub issue), set its \"source\" to that reference "
+            "(e.g. \"github#42\"); otherwise omit it.\n\n"
             "Respond with ONLY a JSON array, no prose:\n"
             '[{"title": "...", "description": "...", '
-            '"impact": "low|medium|high", "complexity": "low|medium|high"}]'
+            '"impact": "low|medium|high", "complexity": "low|medium|high", '
+            '"source": "github#42 (optional)"}]'
         )
         raw = await self.complete(prompt)
         data = extract_json(raw)
@@ -130,11 +133,13 @@ class DreamerActor(SoulActor):
                 continue
             impact = str(item.get("impact", "low")).lower()
             complexity = str(item.get("complexity", "low")).lower()
+            source = str(item.get("source") or "dreamer").strip() or "dreamer"
             proposals.append(Proposal(
                 title=str(item["title"])[:200],
                 description=str(item.get("description", "")),
                 impact=impact if impact in _VALID_LEVELS else "low",
                 complexity=complexity if complexity in _VALID_LEVELS else "low",
+                source=source[:100],
             ))
         return proposals
 
@@ -179,12 +184,14 @@ class ForemanActor(SoulActor):
     async def evaluate(self, proposal: Dict[str, Any], attempt: int = 1) -> Tuple[str, str]:
         """Judge one proposal. Returns (decision, feedback)."""
         constraints = json.dumps(self._soul.behavioral_constraints, default=str)
+        source = proposal.get("source", "dreamer")
         prompt = (
             "The Dreamer has submitted a proposal for your sign-off "
             f"(attempt {attempt}):\n\n"
             f"Title: {proposal.get('title', '')}\n"
             f"Impact: {proposal.get('impact', '?')} · "
-            f"Complexity: {proposal.get('complexity', '?')}\n"
+            f"Complexity: {proposal.get('complexity', '?')} · "
+            f"Source: {source}\n"
             f"Description: {proposal.get('description', '')}\n\n"
             f"Your behavioral constraints: {constraints}\n\n"
             "Approve only proposals that are concrete, in scope for a single "

@@ -23,6 +23,10 @@ class Dreamer(SoulBrick):
     """
 
     name: str = field(default="dreamer")
+    # Operator steering: what should this Dreamer pay attention to?
+    # Settable from the build set config and overridable at runtime
+    # with the /focus command.
+    focus: str = field(default="")
     system_prompt: str = field(
         default=(
             "You are the Dreamer — an exploratory, lateral-thinking agent. "
