@@ -33,16 +33,29 @@ logger = logging.getLogger(__name__)
 # Max provider→tool→provider iterations per user turn.
 MAX_AGENT_STEPS = 500
 
-# Context budget (in estimated tokens) for the assembled prompt. When the
-# conversation would exceed this, old tool-result bodies are elided and
-# over-long contents truncated so a long, tool-heavy autonomous turn can't
-# balloon the prompt until inference times out. Tunable via the
-# BRIKIE_CONTEXT_BUDGET env var; sized for small local context windows.
-DEFAULT_CONTEXT_BUDGET = 12000
+# Context budget (estimated tokens of the verbatim history). Over this, the
+# oldest turns are folded into a faithful LLM summary so a long, tool-heavy
+# autonomous turn keeps inference fast — this is about RESPONSE SPEED, not
+# the model's context window (a huge prompt is slow to process even on a
+# 1M-token model). Generous default; raise via BRIKIE_CONTEXT_BUDGET on fast
+# hardware, lower it if turns feel sluggish.
+DEFAULT_CONTEXT_BUDGET = 48000
 
 # How many of the most recent messages are always kept verbatim during
 # compaction — the agent's immediate working set.
 COMPACTION_KEEP_RECENT = 8
+
+_SUMMARIZER_PROMPT = (
+    "You are a faithful conversation summarizer for an autonomous agent. "
+    "Produce a thorough summary of the segment that PRESERVES every "
+    "load-bearing detail the agent needs to continue its task without "
+    "re-reading the originals: the user's goals and instructions; every "
+    "action the assistant took and the KEY results/findings from each tool "
+    "call (file contents discovered, command outputs, errors, data values); "
+    "decisions made and why; open questions; and the current state of the "
+    "work. Be complete over concise — do not drop specifics like file "
+    "paths, names, numbers, or conclusions. Output ONLY the summary."
+)
 
 # AFK mode defaults: bounded by default, '/afk inf' for the endless loop.
 DEFAULT_AFK_CYCLES = 3
@@ -70,14 +83,6 @@ def _estimate_tokens(content: Any) -> int:
     if not isinstance(content, str):
         return 0
     return (len(content) + 3) // 4
-
-
-def _truncate(text: str, max_chars: int) -> str:
-    """Truncate over-long text, marking how much was dropped."""
-    if len(text) <= max_chars:
-        return text
-    dropped = len(text) - max_chars
-    return f"{text[:max_chars]}… [+{dropped} chars elided to save context]"
 
 
 def _unwrap_hook_data(data: Any) -> Any:
@@ -774,10 +779,13 @@ class EventLoop:
     async def _build_provider_messages(self) -> List[Dict[str, Any]]:
         """Assemble system prompt + memory context + conversation history.
 
-        Compacts the conversation when it would exceed the context budget
-        so a long, tool-heavy turn can't grow the prompt until inference
-        times out (the failure mode that breaks autonomy).
+        Before assembling, losslessly compacts the conversation if it
+        exceeds the context budget — old turns are folded into a faithful
+        LLM-written summary (not deleted) so a long, tool-heavy turn keeps
+        inference fast without losing information.
         """
+        await self._compact_if_needed()
+
         messages: List[Dict[str, Any]] = []
         if self._system_prompt:
             messages.append({"role": "system", "content": self._system_prompt})
@@ -789,52 +797,94 @@ class EventLoop:
                 "content": f"## Memory Context\n{memory_blob}",
             })
 
-        history = self._messages_to_dicts()
-        fixed_tokens = sum(_estimate_tokens(m.get("content")) for m in messages)
-        history = self._compact_to_budget(history, fixed_tokens)
-        messages.extend(history)
+        messages.extend(self._messages_to_dicts())
         return messages
 
-    def _compact_to_budget(
-        self, history: List[Dict[str, Any]], fixed_tokens: int
-    ) -> List[Dict[str, Any]]:
-        """Shrink *history* to fit the context budget, oldest-first.
+    def _history_tokens(self) -> int:
+        """Estimated tokens of the verbatim conversation history."""
+        return sum(_estimate_tokens(m.content) for m in self._message_history)
 
-        Keeps the recent working set verbatim; for older messages it
-        elides bulky tool-result bodies (the main bloat source — e.g. a
-        file dumped by read_file) and truncates very long contents,
-        replacing them with a short marker. Lossy by design, but it keeps
-        the agent under the model's context window. Never mutates
-        ``_message_history`` — only the per-call serialized view.
+    async def _compact_if_needed(self) -> None:
+        """Fold old history into a faithful summary when over budget.
+
+        Lossless in spirit: the oldest segment (everything but the recent
+        working set) is summarized by the provider into a single message
+        that preserves the user's goals, every action taken with its key
+        results, decisions, and current state — then replaces that segment
+        in ``_message_history``. A prior summary at the front is re-folded
+        into the new one (a rolling summary), so it never unbounds.
+
+        Best-effort: if summarization fails, history is left intact (the
+        turn proceeds, slower) — never silent data loss, never a wedge.
         """
-        budget = self._context_budget
-        total = fixed_tokens + sum(_estimate_tokens(m.get("content")) for m in history)
-        if total <= budget:
-            return history
+        if len(self._message_history) <= COMPACTION_KEEP_RECENT + 1:
+            return
+        if self._history_tokens() <= self._context_budget:
+            return
 
-        keep_from = max(0, len(history) - COMPACTION_KEEP_RECENT)
-        elided = 0
-        for i in range(keep_from):
-            msg = history[i]
-            content = msg.get("content")
-            if not isinstance(content, str) or not content:
-                continue
-            saved = _estimate_tokens(content)
-            if msg.get("role") == "tool":
-                history[i] = {**msg, "content": "[earlier tool result elided to stay within context]"}
+        split = len(self._message_history) - COMPACTION_KEEP_RECENT
+        segment = self._message_history[:split]
+        recent = self._message_history[split:]
+
+        summary = await self._summarize_segment(segment)
+        if not summary:
+            return  # leave history intact rather than lose anything
+
+        summary_msg = Message(
+            role="system",
+            content=(
+                "## Summary of earlier conversation (compacted, lossless)\n"
+                + summary
+            ),
+        )
+        self._message_history = [summary_msg] + recent
+        logger.info(
+            "Compacted %d message(s) into a faithful summary "
+            "(budget ~%d tokens, now ~%d).",
+            len(segment), self._context_budget, self._history_tokens(),
+        )
+
+    async def _summarize_segment(self, segment: List[Message]) -> str:
+        """Ask the provider for a faithful, information-preserving summary."""
+        providers = self._registry.get_all(ProviderBrick)
+        if not providers:
+            return ""
+        transcript = self._render_segment(segment)
+        prompt = [
+            {"role": "system", "content": _SUMMARIZER_PROMPT},
+            {"role": "user", "content":
+             "Summarize this conversation segment so the assistant can "
+             "continue the task without re-reading the originals:\n\n"
+             + transcript},
+        ]
+        try:
+            result = await providers[0].get_completion(prompt, [])
+            content = result[0] if result else ""
+            if not content and len(result) >= 3:
+                content = (result[2] or {}).get("reasoning", "")
+            return (content or "").strip()
+        except Exception as exc:
+            logger.warning("Context summarization failed (%s) — keeping "
+                           "full history this turn.", exc)
+            return ""
+
+    @staticmethod
+    def _render_segment(segment: List[Message]) -> str:
+        """Render a history segment to plain text for summarization."""
+        lines: List[str] = []
+        for m in segment:
+            role = m.role
+            if role == "tool":
+                lines.append(f"[tool result] {m.content}")
+            elif role == "assistant" and m.tool_calls:
+                calls = ", ".join(
+                    c.get("function", {}).get("name", "?") for c in m.tool_calls
+                )
+                text = f" {m.content}" if m.content else ""
+                lines.append(f"[assistant called: {calls}]{text}")
             else:
-                history[i] = {**msg, "content": _truncate(content, 400)}
-            total -= saved - _estimate_tokens(history[i]["content"])
-            elided += 1
-            if total <= budget:
-                break
-
-        if elided:
-            logger.info(
-                "Context compaction: elided %d old message(s) to fit "
-                "~%d-token budget.", elided, budget,
-            )
-        return history
+                lines.append(f"[{role}] {m.content}")
+        return "\n".join(lines)
 
     async def _build_memory_blob(self) -> str:
         """Collect compressed context from memory-capable bricks, if any.
