@@ -119,11 +119,44 @@ class DiscordBrick(InterfaceBrick):
         async def on_message(message: Any) -> None:  # noqa: ANN401
             await self._on_message(message)
 
+        @self._client.event
+        async def on_ready() -> None:
+            user = getattr(self._client, "user", None)
+            logger.info("DiscordBrick connected as %s — message the bot to begin.", user)
+
         self._run_task = asyncio.create_task(
-            self._client.start(token), name="discord-gateway"
+            self._run_gateway(token), name="discord-gateway"
         )
-        logger.info("DiscordBrick connecting to the gateway.")
+        logger.info("DiscordBrick connecting to the gateway…")
         await super().init()
+
+    async def _run_gateway(self, token: str) -> None:
+        """Run the gateway, surfacing the failures users actually hit.
+
+        The most common is the message_content privileged intent not
+        being enabled — without it the bot connects but never sees text.
+        """
+        try:
+            await self._client.start(token)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            name = type(exc).__name__
+            if "PrivilegedIntents" in name:
+                logger.error(
+                    "DiscordBrick: the bot connected but the MESSAGE "
+                    "CONTENT intent is disabled. Enable it at "
+                    "https://discord.com/developers → your app → Bot → "
+                    "Privileged Gateway Intents → Message Content Intent, "
+                    "then restart. (Without it the bot can't read messages.)"
+                )
+            elif "LoginFailure" in name or "Improper token" in str(exc):
+                logger.error(
+                    "DiscordBrick: the bot token was rejected — check "
+                    "DISCORD_BOT_TOKEN."
+                )
+            else:
+                logger.error("DiscordBrick gateway stopped: %s: %s", name, exc)
 
     async def shutdown(self) -> None:
         if self._client is not None:
