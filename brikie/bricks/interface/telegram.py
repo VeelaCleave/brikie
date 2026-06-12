@@ -97,10 +97,9 @@ class TelegramBrick(InterfaceBrick):
             await super().init()
             return
         if not self._allowed:
-            logger.warning(
-                "TelegramBrick: allowed_user_ids is empty — every sender "
-                "will be refused (and told their id). Add yours to the "
-                "build set config."
+            logger.info(
+                "TelegramBrick: no allowlist — the first person to message "
+                "the bot claims it as owner."
             )
         self._client = httpx.AsyncClient(
             base_url=f"{self._api_url}/bot{token}", timeout=_POLL_TIMEOUT + 10
@@ -160,24 +159,33 @@ class TelegramBrick(InterfaceBrick):
             if not text or sender is None or chat_id is None:
                 continue
 
-            if sender not in self._allowed:
-                if sender not in self._warned:
-                    self._warned.add(sender)
-                    await self._send(
-                        chat_id,
-                        "🧱 This brikie instance hasn't authorized you.\n"
-                        f"Your Telegram user id is {sender} — the operator "
-                        "can add it to the telegram brick's "
-                        "allowed_user_ids config.",
-                    )
-                logger.warning(
-                    "Telegram: refused message from unauthorized user %s",
-                    sender,
-                )
+            if not await self._authorize(sender, chat_id):
                 continue
 
             self._chats.add(chat_id)
             await self._queue.put(text)
+
+    async def _authorize(self, sender: int, chat_id: int) -> bool:
+        """Allow known users; with no allowlist, the first sender claims it.
+
+        Configuring ``allowed_user_ids`` keeps the strict allowlist. With
+        it empty, the bot adopts the first person who messages it as its
+        owner (so onboarding needs only a token, no user id), and refuses
+        everyone else.
+        """
+        if not self._allowed:
+            self._allowed.add(sender)
+            logger.info("Telegram: claimed by user %s (first to message).", sender)
+            return True
+        if sender in self._allowed:
+            return True
+        if sender not in self._warned:
+            self._warned.add(sender)
+            await self._send(
+                chat_id, "🧱 This bot is already paired with someone else."
+            )
+        logger.warning("Telegram: refused message from user %s", sender)
+        return False
 
     # ------------------------------------------------------------------
     # Output — chat-shaped rendering

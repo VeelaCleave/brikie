@@ -47,11 +47,12 @@ class TestAllowlist:
         assert await brick.get_input() == "hello"
         assert ch in brick._channels
 
-    async def test_unauthorized_refused_with_id(self, brick):
+    async def test_non_owner_refused(self, brick):
+        # brick fixture has allowlist [111]; 999 is not the owner
         ch = _FakeChannel()
         await brick._on_message(_FakeMessage(999, "let me in", ch))
         assert brick._queue.empty()
-        assert "999" in ch.sent[0]
+        assert "already paired" in ch.sent[0]
 
     async def test_unauthorized_warned_once(self, brick):
         ch = _FakeChannel()

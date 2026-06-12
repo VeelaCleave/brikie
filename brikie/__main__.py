@@ -73,12 +73,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
              "groq, ollama, lmstudio, vllm) over the Build Set — ideal "
              "for sandboxed/scripted runs where env vars carry the keys",
     )
+    parser.add_argument(
+        "command",
+        nargs="?",
+        default=None,
+        help="'config' to (re)run setup — pick a provider and connect a "
+             "chat app. Omit to start the agent.",
+    )
     return parser.parse_args(argv)
 
 
 async def main() -> None:
     """Bootstrap the Baseplate kernel and run the event loop."""
     args = parse_args()
+
+    # Persisted secrets (chat tokens, etc.) — an explicit export wins.
+    from brikie.connect import load_env_file
+    load_env_file()
 
     # First run on a real terminal? Sort the provider out before booting.
     from brikie.onboard import maybe_onboard
@@ -158,6 +169,18 @@ async def main() -> None:
 
 def entry_point() -> None:
     """Synchronous entry point for ``brikie`` CLI command."""
+    args = parse_args()
+    if args.command == "config":
+        # Setup wizard (provider + chat) — runs its own loop, never boots
+        # the kernel.
+        from brikie.connect import load_env_file
+        from brikie.onboard import run_config
+        load_env_file()
+        sys.exit(run_config(_BUILD_SETS_DIR))
+    if args.command:
+        print(f"[brikie] Unknown command '{args.command}'. Did you mean 'config'?",
+              file=sys.stderr)
+        sys.exit(1)
     try:
         asyncio.run(main())
     except KeyboardInterrupt:

@@ -20,8 +20,13 @@ brikie
 
 That's it. First run opens a 60-second setup: brikie detects running
 local servers (Ollama, LM Studio, vLLM) and API keys already in your
-environment, and one keystroke later you're chatting. Rerun it any time
-with `brikie --onboard`.
+environment, picks your model, and offers to connect a chat app
+(Telegram or Discord) — paste a bot token and you can talk to your
+agent from your phone. Re-run the whole setup any time with:
+
+```sh
+brikie config
+```
 
 Want to choose your bricks up front instead? Compose a custom stack at
 [brikie.co](https://brikie.co) and run the one-liner it gives you:

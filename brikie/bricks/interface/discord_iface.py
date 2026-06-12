@@ -105,10 +105,9 @@ class DiscordBrick(InterfaceBrick):
             await super().init()
             return
         if not self._allowed:
-            logger.warning(
-                "DiscordBrick: allowed_user_ids is empty — every sender "
-                "will be refused (and told their id). Add yours to the "
-                "build set config."
+            logger.info(
+                "DiscordBrick: no allowlist — the first person to message "
+                "the bot claims it as owner."
             )
 
         intents = discord.Intents.default()
@@ -190,20 +189,33 @@ class DiscordBrick(InterfaceBrick):
             return
         sender = message.author.id
 
-        if sender not in self._allowed:
-            if sender not in self._warned:
-                self._warned.add(sender)
-                await self._reply(
-                    message.channel,
-                    "🧱 This brikie instance hasn't authorized you.\n"
-                    f"Your Discord user id is `{sender}` — the operator can "
-                    "add it to the discord brick's allowed_user_ids config.",
-                )
-            logger.warning("Discord: refused message from unauthorized user %s", sender)
+        if not await self._authorize(sender, message.channel):
             return
 
         self._channels.add(message.channel)
         await self._queue.put(text)
+
+    async def _authorize(self, sender: int, channel: Any) -> bool:  # noqa: ANN401
+        """Allow known users; with no allowlist, the first sender claims it.
+
+        Configuring ``allowed_user_ids`` keeps the strict allowlist. With
+        it empty, the bot adopts the first person who messages it as its
+        owner (so onboarding needs only a token, no user id), and refuses
+        everyone else.
+        """
+        if not self._allowed:
+            self._allowed.add(sender)
+            logger.info("Discord: claimed by user %s (first to message).", sender)
+            return True
+        if sender in self._allowed:
+            return True
+        if sender not in self._warned:
+            self._warned.add(sender)
+            await self._reply(
+                channel, "🧱 This bot is already paired with someone else."
+            )
+        logger.warning("Discord: refused message from user %s", sender)
+        return False
 
     # ------------------------------------------------------------------
     # Output — chat-shaped rendering

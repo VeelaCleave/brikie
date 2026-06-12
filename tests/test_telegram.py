@@ -47,21 +47,22 @@ class TestAllowlist:
         assert await brick.get_input() == "hello"
         assert 555 in brick._chats
 
-    async def test_unauthorized_user_refused_with_their_id(self, brick):
+    async def test_non_owner_refused(self, brick):
+        # brick fixture has allowlist [111]; 999 is not the owner
         await brick._process_updates([_update(1, 999, 666, "let me in")])
         assert brick._queue.empty()
         assert 666 not in brick._chats
         assert len(brick.sent) == 1
-        assert "999" in brick.sent[0]["text"]
+        assert "already paired" in brick.sent[0]["text"]
 
-    async def test_unauthorized_user_warned_only_once(self, brick):
+    async def test_non_owner_warned_only_once(self, brick):
         await brick._process_updates([
             _update(1, 999, 666, "hi"),
             _update(2, 999, 666, "hi again"),
         ])
         assert len(brick.sent) == 1
 
-    async def test_empty_allowlist_refuses_everyone(self, monkeypatch):
+    async def test_empty_allowlist_claims_first_messager(self, monkeypatch):
         b = TelegramBrick(token="tok", allowed_user_ids=[])
         b.sent = []
 
@@ -71,8 +72,9 @@ class TestAllowlist:
 
         monkeypatch.setattr(b, "_api", fake_api)
         await b._process_updates([_update(1, 42, 42, "anyone home?")])
-        assert b._queue.empty()
-        assert len(b.sent) == 1
+        # first messager is adopted as owner — message goes through
+        assert await b.get_input() == "anyone home?"
+        assert 42 in b._allowed
 
 
 class TestUpdates:

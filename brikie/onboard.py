@@ -107,10 +107,52 @@ def run_onboarding(sets_dir: Path) -> None:
     MARKER.parent.mkdir(parents=True, exist_ok=True)
     MARKER.write_text(f"{preset.name}\n")
 
+    _connect_chat(console, sets_dir)
+
     console.print(
         f"\n[bold {ACCENT_SOFT}]done[/] — {preset.label} / "
         f"[bold]{config['model']}[/] saved. "
-        f"[dim](rerun this any time with `brikie --onboard`)[/]\n"
+        f"[dim](rerun this any time with `brikie config`)[/]\n"
+    )
+
+
+def run_config(sets_dir: Path) -> int:
+    """``brikie config`` — re-run setup (provider + chat) any time."""
+    try:
+        run_onboarding(sets_dir)
+        return 0
+    except (KeyboardInterrupt, EOFError):
+        print("\nconfig cancelled.")
+        return 130
+
+
+def _connect_chat(console: Console, sets_dir: Path) -> None:
+    """Optional onboarding step: connect a chat platform with just a token."""
+    from brikie.connect import CHAT_PLATFORMS, add_interface_to_set, save_env_var
+
+    console.print(Text("\nChat from your phone? (optional)", style=f"bold {ACCENT_SOFT}"))
+    platforms = list(CHAT_PLATFORMS.values())
+    for i, plat in enumerate(platforms, start=1):
+        console.print(f"  {i}. [bold]{plat['label']}[/]  [dim]{plat['make_bot']}[/]")
+    raw = console.input(
+        f"  [dim]pick a number, or enter to[/] [{ACCENT}]skip[/]: "
+    ).strip()
+    if not raw or not raw.isdigit() or not (1 <= int(raw) <= len(platforms)):
+        return
+    plat = platforms[int(raw) - 1]
+
+    if plat["post_step"]:
+        console.print(f"  [dim]first: {plat['post_step']}[/]")
+    token = console.input(f"  paste your {plat['label']} bot token: ").strip()
+    if not token:
+        console.print("  [yellow]no token — skipped.[/]")
+        return
+
+    save_env_var(plat["token_env"], token)
+    add_interface_to_set(sets_dir, "default", plat["brk"])
+    console.print(
+        f"  [green]✓ {plat['label']} connected[/] [dim](token saved; the "
+        f"first person to message the bot becomes its owner)[/]"
     )
 
 
