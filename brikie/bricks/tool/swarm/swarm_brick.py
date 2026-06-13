@@ -51,9 +51,11 @@ from typing import Any, Dict, List, Optional
 from brikie.bricks.tool.base import ToolBrick
 from brikie.bricks.tool.swarm.swarm_store import SwarmStore
 from brikie.kernel.registry import ProviderBrick, ToolBrick as ToolBrickABC
+from brikie.kernel.registry import InterfaceBrick
 from brikie.kernel.subagent import (
     DEFAULT_CONTEXT_BUDGET,
     DEFAULT_MAX_STEPS,
+    CostBudget,
     SubAgentResult,
     SubAgentRunner,
     SwarmBlackboard,
@@ -231,6 +233,8 @@ class SwarmToolBrick(ToolBrick):
         max_tasks: int = 8,
         context_budget: int = DEFAULT_CONTEXT_BUDGET,
         auto_review: bool = True,
+        subagent_timeout: float = 180.0,
+        max_total_tokens: int = 0,
     ) -> None:
         super().__init__()
         self._name = "swarm"
@@ -242,6 +246,10 @@ class SwarmToolBrick(ToolBrick):
         self._max_tasks = max_tasks
         self._context_budget = context_budget
         self._auto_review = auto_review
+        # Per-sub-agent wall-clock deadline (0 = none) — a hung tool can't
+        # hang the swarm. A swarm-wide token ceiling (0 = unlimited).
+        self._subagent_timeout = subagent_timeout
+        self._max_total_tokens = max_total_tokens
         # role -> system prompt, contributed by loaded souls (set_souls).
         self._soul_roles: Dict[str, str] = {}
 
@@ -345,6 +353,14 @@ class SwarmToolBrick(ToolBrick):
         await self._log_goal("swarm.dispatch",
                              f"delegated {len(tasks)} task(s) to: {roles_summary}")
 
+        # Shared across the whole dispatch: a token ceiling and a live event
+        # sink so the user watches sub-agents work instead of staring at
+        # silence for the minutes a dispatch can take.
+        budget = CostBudget(self._max_total_tokens)
+        sink = self._make_event_sink()
+        await sink({"kind": "dispatch", "role": "swarm",
+                    "count": len(tasks), "roles": roles_summary})
+
         runners_and_tasks = []
         for i, (role, task_text) in enumerate(tasks):
             sender = f"{role}#{i + 1}"
@@ -357,15 +373,20 @@ class SwarmToolBrick(ToolBrick):
                 max_steps=self._max_steps,
                 context_budget=self._context_budget,
                 label=role,
+                on_event=sink,
+                budget=budget,
             )
             full_task = f"{briefing}{task_text}" if briefing else task_text
             runners_and_tasks.append((runner, self._role_prompt(role), full_task))
 
         logger.info("Swarm %s dispatching %d sub-agent(s).", run_id, len(tasks))
-        results = await run_swarm(runners_and_tasks, max_parallel=self._max_parallel)
+        results = await run_swarm(runners_and_tasks,
+                                  max_parallel=self._max_parallel,
+                                  timeout=self._subagent_timeout)
 
         if do_review:
-            await self._auto_review_coders(results, provider, base_schemas)
+            await self._auto_review_coders(results, provider, base_schemas,
+                                           sink=sink, budget=budget)
 
         # Persist + surface each outcome in the active goal's progress log.
         for i, result in enumerate(results):
@@ -377,12 +398,20 @@ class SwarmToolBrick(ToolBrick):
                                  f"{verdict} — {result.report[:160]}")
 
         ok_count = sum(1 for r in results if r.ok)
-        summary = f"{ok_count}/{len(results)} sub-agent(s) completed successfully"
+        tokens_in = sum(r.tokens_in for r in results)
+        tokens_out = sum(r.tokens_out for r in results)
+        summary = (f"{ok_count}/{len(results)} sub-agent(s) completed "
+                   f"successfully ({tokens_in + tokens_out} tokens)")
+        if budget.exceeded():
+            summary += " — token budget reached"
         await self._store.finish_run(run_id, ok_count, summary)
+        await sink({"kind": "summary", "role": "swarm", "text": summary})
 
         out: Dict[str, Any] = {
             "run_id": run_id,
             "summary": summary,
+            "tokens": {"in": tokens_in, "out": tokens_out,
+                       "budget_reached": budget.exceeded()},
             "results": [r.to_dict() for r in results],
         }
         if board:
@@ -396,6 +425,8 @@ class SwarmToolBrick(ToolBrick):
         results: List[SubAgentResult],
         provider: Any,
         base_schemas: List[Dict[str, Any]],
+        sink: Any = None,
+        budget: Any = None,
     ) -> None:
         """Auto-spawn a reviewer for each successful coder result.
 
@@ -420,6 +451,8 @@ class SwarmToolBrick(ToolBrick):
                 max_steps=self._max_steps,
                 context_budget=self._context_budget,
                 label="reviewer",
+                on_event=sink,
+                budget=budget,
             )
             review_task = (
                 "Review another sub-agent's completed work for correctness "
@@ -433,11 +466,66 @@ class SwarmToolBrick(ToolBrick):
             )
             review_runners.append((runner, _ROLE_PROMPTS["reviewer"], review_task))
 
-        reviews = await run_swarm(review_runners, max_parallel=self._max_parallel)
+        reviews = await run_swarm(review_runners, max_parallel=self._max_parallel,
+                                  timeout=self._subagent_timeout)
         for (idx, _r), rev in zip(targets, reviews):
             results[idx].reviewed = True
             results[idx].review = rev.report.strip()
             results[idx].review_ok = "REVIEW: PASS" in rev.report.upper()
+            # Fold the reviewer's token cost into the reviewed result so the
+            # dispatch total stays honest.
+            results[idx].tokens_in += rev.tokens_in
+            results[idx].tokens_out += rev.tokens_out
+
+    # ------------------------------------------------------------------
+    # Live event streaming
+    # ------------------------------------------------------------------
+
+    def _make_event_sink(self):
+        """Build an async sink that narrates sub-agent events to interfaces.
+
+        A dispatch can run for minutes; this turns it from a black box into a
+        live feed. Each Interface Brick that exposes ``render_swarm_event``
+        gets structured events; others fall back to plain ``output``. Best-
+        effort — a noisy or slow interface never blocks the swarm.
+        """
+        registry = self._registry
+
+        def _line(ev: Dict[str, Any]) -> str:
+            kind, role = ev.get("kind"), ev.get("role", "?")
+            if kind == "dispatch":
+                return f"⇶ swarm: dispatching {ev.get('count')} sub-agent(s) → {ev.get('roles')}"
+            if kind == "start":
+                return f"  ▸ {role} started: {ev.get('task', '')[:80]}"
+            if kind == "tool":
+                return f"    {role} → {ev.get('tool')}"
+            if kind == "blocked":
+                return f"    {role} ⛔ {ev.get('tool')} blocked by security"
+            if kind == "timeout":
+                return f"  ⏱ {role} timed out after {ev.get('seconds')}s"
+            if kind == "done":
+                mark = "✓" if ev.get("ok") else "✗"
+                return f"  {mark} {role} {'done' if ev.get('ok') else 'failed'}"
+            if kind == "summary":
+                return f"⇶ swarm: {ev.get('text')}"
+            return f"  {role}: {kind}"
+
+        async def sink(ev: Dict[str, Any]) -> None:
+            if registry is None:
+                return
+            text = _line(ev)
+            for iface in registry.get_all(InterfaceBrick):
+                try:
+                    if hasattr(iface, "render_swarm_event"):
+                        await iface.render_swarm_event(ev.get("role", "?"),
+                                                       ev.get("kind", ""), text)
+                    elif hasattr(iface, "output"):
+                        await iface.output(text)
+                except Exception:
+                    logger.debug("swarm event sink: interface failed",
+                                 exc_info=True)
+
+        return sink
 
     # ------------------------------------------------------------------
     # Internal helpers

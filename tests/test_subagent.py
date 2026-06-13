@@ -12,7 +12,10 @@ import json
 from typing import Any, Dict, List
 
 from brikie.config.types import HookType
+import asyncio
+
 from brikie.kernel.subagent import (
+    CostBudget,
     SubAgentRunner,
     SubAgentResult,
     SwarmBlackboard,
@@ -249,3 +252,97 @@ class TestBlackboard:
         res = await _runner(prov, exec_tool, label="researcher#1").run("sys", "x")
         assert res.ok is True
         assert [m["note"] for m in bb.snapshot()] == ["secret: 42"]
+
+
+class TestPhase1Bounds:
+    async def test_wall_clock_timeout_returns_bounded_failure(self):
+        # A provider that hangs forever — the step budget would NEVER fire,
+        # only a wall-clock timeout saves the swarm.
+        class Hang:
+            name = "hang"
+            async def get_completion(self, m, t):
+                await asyncio.sleep(60)
+
+        runner = _runner(Hang(), RecordingExecutor(), label="slow")
+        results = await run_swarm([(runner, "sys", "task")], timeout=0.2)
+        assert results[0].ok is False
+        assert results[0].error == "timeout"
+        assert "timed out" in results[0].report
+
+    async def test_cost_ceiling_stops_early(self):
+        budget = CostBudget(max_tokens=100)
+        budget.add(150)                       # already over before we start
+        prov = ScriptedProvider([("loop", [_call("read_file", {"p": 1})], {})])
+        res = await _runner(prov, RecordingExecutor(), budget=budget).run("sys", "x")
+        assert res.ok is False
+        assert res.error == "cost_ceiling"
+        assert prov.calls == 0                # stopped before spending a call
+
+    async def test_token_accounting_sums_usage(self):
+        prov = ScriptedProvider([
+            ("go", [_call("read_file", {"p": 1})],
+             {"usage": {"prompt_tokens": 10, "completion_tokens": 4}}),
+            ("done. TASK COMPLETE", [],
+             {"usage": {"prompt_tokens": 20, "completion_tokens": 6}}),
+        ])
+        res = await _runner(prov, RecordingExecutor()).run("sys", "x")
+        assert res.tokens_in == 30 and res.tokens_out == 10
+
+    async def test_budget_accrues_across_calls(self):
+        budget = CostBudget(max_tokens=25)
+        prov = ScriptedProvider([
+            ("a", [_call("t", {})], {"usage": {"prompt_tokens": 20, "completion_tokens": 0}}),
+            ("b", [_call("t", {})], {"usage": {"prompt_tokens": 20, "completion_tokens": 0}}),
+            ("done. TASK COMPLETE", [], {}),
+        ])
+        res = await _runner(prov, RecordingExecutor(), budget=budget).run("sys", "x")
+        # First call (20) is under; second call pushes to 40 ≥ 25, so the
+        # third loop iteration stops before a third provider call.
+        assert res.error == "cost_ceiling"
+        assert prov.calls == 2
+
+
+class TestPhase1Streaming:
+    async def test_lifecycle_events_emitted(self):
+        events = []
+
+        async def sink(ev):
+            events.append((ev["kind"], ev.get("role"), ev.get("tool")))
+
+        prov = ScriptedProvider([
+            ("go", [_call("read_file", {"p": 1})], {}),
+            ("done. TASK COMPLETE", [], {}),
+        ])
+        await _runner(prov, RecordingExecutor(), label="researcher").run("sys", "x")  # no sink → no crash
+
+        runner = SubAgentRunner(
+            provider=prov.__class__([
+                ("go", [_call("read_file", {"p": 1})], {}),
+                ("done. TASK COMPLETE", [], {}),
+            ]),
+            tool_schemas=[], execute_tool=RecordingExecutor(),
+            label="researcher", on_event=sink,
+        )
+        await runner.run("sys", "x")
+        kinds = [e[0] for e in events]
+        assert kinds[0] == "start"
+        assert "tool" in kinds                  # the read_file call was narrated
+        assert kinds[-1] == "done"
+        assert ("tool", "researcher", "read_file") in events
+
+    async def test_timeout_event_emitted(self):
+        events = []
+
+        async def sink(ev):
+            events.append(ev["kind"])
+
+        class Hang:
+            name = "hang"
+            async def get_completion(self, m, t):
+                await asyncio.sleep(60)
+
+        runner = SubAgentRunner(provider=Hang(), tool_schemas=[],
+                                execute_tool=RecordingExecutor(),
+                                label="slow", on_event=sink)
+        await run_swarm([(runner, "sys", "x")], timeout=0.2)
+        assert "timeout" in events

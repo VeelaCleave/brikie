@@ -32,7 +32,7 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, List
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from brikie.config.types import HookEvent, HookType, ToolCall
 
@@ -58,6 +58,11 @@ _FAIL_MARKER = "TASK FAILED"
 # Bricks (minus the swarm tools themselves, so a sub-agent can't recurse).
 ToolExecutor = Callable[[str, Dict[str, Any]], Awaitable[str]]
 
+# A callback the runner emits lifecycle events to so a long swarm isn't a
+# black box. Each event is a dict: {"kind", "role", ...}. Kinds: "start",
+# "tool", "blocked", "done", "timeout". Fire-and-forget; failures are swallowed.
+EventSink = Callable[[Dict[str, Any]], Awaitable[None]]
+
 
 def _estimate_tokens(text: Any) -> int:
     """Cheap, dependency-free token estimate (~4 chars/token)."""
@@ -79,6 +84,9 @@ class SubAgentResult:
     tools_used: List[str] = field(default_factory=list)
     blocked: List[str] = field(default_factory=list)
     error: str = ""
+    # Real token accounting (summed from provider usage meta).
+    tokens_in: int = 0
+    tokens_out: int = 0
     # Set when an auto-reviewer sub-agent inspected this result (coder pass).
     reviewed: bool = False
     review_ok: bool = False
@@ -95,6 +103,8 @@ class SubAgentResult:
             "tools_used": self.tools_used,
             "blocked": self.blocked,
             "error": self.error,
+            "tokens_in": self.tokens_in,
+            "tokens_out": self.tokens_out,
         }
         if self.reviewed:
             out["reviewed"] = True
@@ -130,6 +140,29 @@ class SwarmBlackboard:
         return list(self._messages)
 
 
+class CostBudget:
+    """A shared, cooperative token ceiling for one swarm dispatch.
+
+    A fan-out can burn a lot of tokens fast. Each sub-agent checks the
+    shared budget before every provider call and stops early once the
+    swarm's combined usage crosses the ceiling — a real cap, not a
+    post-hoc tally. ``max_tokens <= 0`` means unlimited.
+    """
+
+    def __init__(self, max_tokens: int = 0) -> None:
+        self.max_tokens = max_tokens
+        self.used = 0
+
+    def add(self, tokens: int) -> None:
+        self.used += max(0, tokens)
+
+    def exceeded(self) -> bool:
+        return self.max_tokens > 0 and self.used >= self.max_tokens
+
+    def remaining(self) -> int:
+        return max(0, self.max_tokens - self.used) if self.max_tokens > 0 else -1
+
+
 class SubAgentRunner:
     """Runs one scoped task as an isolated, bounded sub-agent.
 
@@ -147,6 +180,9 @@ class SubAgentRunner:
         context_budget: Estimated-token ceiling for the isolated history;
             over it, old tool results are truncated.
         label: A short name for logs (e.g. the role).
+        on_event: Optional async sink for lifecycle events (live streaming).
+        budget: Optional shared CostBudget — the sub-agent stops early when
+            the swarm's combined token usage crosses the ceiling.
     """
 
     def __init__(
@@ -158,6 +194,8 @@ class SubAgentRunner:
         max_steps: int = DEFAULT_MAX_STEPS,
         context_budget: int = DEFAULT_CONTEXT_BUDGET,
         label: str = "subagent",
+        on_event: Optional[EventSink] = None,
+        budget: Optional[CostBudget] = None,
     ) -> None:
         self._provider = provider
         self._tool_schemas = tool_schemas
@@ -166,6 +204,24 @@ class SubAgentRunner:
         self._max_steps = max(1, max_steps)
         self._context_budget = context_budget
         self._label = label
+        self._on_event = on_event
+        self._budget = budget
+        self._tokens_in = 0
+        self._tokens_out = 0
+
+    @property
+    def label(self) -> str:
+        return self._label
+
+    async def _emit(self, kind: str, **fields: Any) -> None:
+        """Surface a lifecycle event to the sink (best-effort)."""
+        if self._on_event is None:
+            return
+        try:
+            await self._on_event({"kind": kind, "role": self._label, **fields})
+        except Exception:
+            logger.debug("[%s] event sink failed (%s)", self._label, kind,
+                         exc_info=True)
 
     async def run(self, system_prompt: str, task: str) -> SubAgentResult:
         """Drive the sub-agent to a final report (or a bounded failure)."""
@@ -183,26 +239,42 @@ class SubAgentRunner:
         blocked: List[str] = []
         total_tool_calls = 0
 
+        await self._emit("start", task=task[:120])
+
         for step in range(self._max_steps):
+            # Cooperative cost ceiling: stop before spending more once the
+            # swarm's combined token usage has crossed the budget.
+            if self._budget is not None and self._budget.exceeded():
+                return self._result(
+                    task, ok=False, steps=step, tool_calls=total_tool_calls,
+                    tools_used=tools_used, blocked=blocked,
+                    report="stopped: the swarm's token budget was reached.",
+                    error="cost_ceiling",
+                )
+
             self._compact(messages)
             try:
                 content, raw_calls = await self._complete(messages)
+            except asyncio.CancelledError:
+                # A timeout/cancel from the swarm — propagate cleanly.
+                await self._emit("cancelled")
+                raise
             except Exception as exc:  # provider blew up — bounded failure
                 logger.warning("[%s] provider error: %s", self._label, exc)
-                return SubAgentResult(
-                    role=self._label, task=task, ok=False,
-                    report=f"sub-agent could not run: {exc}",
-                    steps=step, tool_calls=total_tool_calls,
-                    tools_used=tools_used, blocked=blocked, error=str(exc),
+                await self._emit("done", ok=False, error=str(exc))
+                return self._result(
+                    task, ok=False, steps=step, tool_calls=total_tool_calls,
+                    tools_used=tools_used, blocked=blocked,
+                    report=f"sub-agent could not run: {exc}", error=str(exc),
                 )
 
             if not raw_calls:
                 ok = _DONE_MARKER in content and _FAIL_MARKER not in content
-                return SubAgentResult(
-                    role=self._label, task=task, ok=ok,
-                    report=content.strip() or "(no report)",
-                    steps=step + 1, tool_calls=total_tool_calls,
+                await self._emit("done", ok=ok, steps=step + 1)
+                return self._result(
+                    task, ok=ok, steps=step + 1, tool_calls=total_tool_calls,
                     tools_used=tools_used, blocked=blocked,
+                    report=content.strip() or "(no report)",
                 )
 
             messages.append({
@@ -216,15 +288,22 @@ class SubAgentRunner:
             blocked.extend(blk)
             messages.extend(results)
 
-        return SubAgentResult(
-            role=self._label, task=task, ok=False,
+        await self._emit("done", ok=False, error="step_budget_exhausted")
+        return self._result(
+            task, ok=False, steps=self._max_steps, tool_calls=total_tool_calls,
+            tools_used=tools_used, blocked=blocked,
             report=(
                 f"step budget ({self._max_steps}) exhausted before the task "
                 "was reported complete."
             ),
-            steps=self._max_steps, tool_calls=total_tool_calls,
-            tools_used=tools_used, blocked=blocked,
             error="step_budget_exhausted",
+        )
+
+    def _result(self, task: str, **kw: Any) -> SubAgentResult:
+        """Build a SubAgentResult, folding in this run's token totals."""
+        return SubAgentResult(
+            role=self._label, task=task,
+            tokens_in=self._tokens_in, tokens_out=self._tokens_out, **kw,
         )
 
     # ------------------------------------------------------------------
@@ -232,13 +311,25 @@ class SubAgentRunner:
     # ------------------------------------------------------------------
 
     async def _complete(self, messages: List[Dict[str, Any]]):
-        """One provider call; normalize 2-/3-tuple returns to (content, calls)."""
+        """One provider call; normalize 2-/3-tuple returns to (content, calls).
+
+        Also records real token usage from the provider's meta into this
+        run's totals and the shared cost budget.
+        """
         result = await self._provider.get_completion(messages, self._tool_schemas)
         content = result[0] or ""
         raw_calls = result[1] or []
-        if not content and len(result) >= 3:
+        meta = result[2] if len(result) >= 3 else {}
+        if not content and meta:
             # Reasoning-only models park the answer in the thinking channel.
-            content = (result[2] or {}).get("reasoning", "") or ""
+            content = (meta or {}).get("reasoning", "") or ""
+        usage = (meta or {}).get("usage") or {}
+        tin = usage.get("prompt_tokens", 0) or 0
+        tout = usage.get("completion_tokens", 0) or 0
+        self._tokens_in += tin
+        self._tokens_out += tout
+        if self._budget is not None:
+            self._budget.add(tin + tout)
         return content, raw_calls
 
     async def _run_tools(
@@ -260,7 +351,9 @@ class SubAgentRunner:
             if tc.result is not None:
                 # A security hook already settled (blocked/revised) this call.
                 blocked.append(f"{tc.name}: {tc.result}")
+                await self._emit("blocked", tool=tc.name)
                 continue
+            await self._emit("tool", tool=tc.name)
             try:
                 tc.result = await self._execute_tool(tc.name, tc.args)
             except Exception as exc:
@@ -347,20 +440,48 @@ class SubAgentRunner:
 async def run_swarm(
     runners_and_tasks: List["tuple[SubAgentRunner, str, str]"],
     max_parallel: int = 4,
+    timeout: float = 0,
 ) -> List[SubAgentResult]:
     """Run several sub-agents concurrently, bounded by a parallelism cap.
 
     Each entry is ``(runner, system_prompt, task)``. Results return in the
     same order as the input. A semaphore caps how many sub-agents hit the
     provider at once so a big fan-out doesn't stampede the model server.
+
+    ``timeout`` (seconds, 0 = none) is a per-sub-agent WALL-CLOCK deadline:
+    a sub-agent that exceeds it — e.g. stuck on a hung tool, where the step
+    budget alone would never fire — is cancelled and returned as a bounded
+    ``timeout`` failure instead of hanging the whole swarm.
+
+    On outer cancellation (the parent turn is torn down) every in-flight
+    sub-agent is cancelled cleanly; no tasks are orphaned.
     """
     sem = asyncio.Semaphore(max(1, max_parallel))
 
     async def _one(runner: SubAgentRunner, system: str, task: str) -> SubAgentResult:
         async with sem:
-            return await runner.run(system, task)
+            try:
+                if timeout and timeout > 0:
+                    return await asyncio.wait_for(runner.run(system, task), timeout)
+                return await runner.run(system, task)
+            except asyncio.TimeoutError:
+                logger.warning("[%s] timed out after %.0fs", runner.label, timeout)
+                await runner._emit("timeout", seconds=timeout)
+                return SubAgentResult(
+                    role=runner.label, task=task, ok=False,
+                    report=f"timed out after {timeout:.0f}s (no result).",
+                    error="timeout",
+                )
 
-    return await asyncio.gather(*(
-        _one(runner, system, task)
+    tasks = [
+        asyncio.ensure_future(_one(runner, system, task))
         for runner, system, task in runners_and_tasks
-    ))
+    ]
+    try:
+        return await asyncio.gather(*tasks)
+    except asyncio.CancelledError:
+        for t in tasks:
+            t.cancel()
+        # Let the cancellations settle so nothing is left dangling.
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
