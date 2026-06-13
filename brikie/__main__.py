@@ -225,6 +225,37 @@ async def main() -> None:
         pass
 
 
+def _run_login(provider: str) -> int:
+    """``brikie login openai`` — sign in with ChatGPT and save OAuth tokens."""
+    if provider not in ("openai", "chatgpt"):
+        print(f"[brikie] Unknown login provider '{provider}'. Try: "
+              f"brikie login openai", file=sys.stderr)
+        return 1
+    from brikie.auth.openai_oauth import (
+        BRIKIE_AUTH_PATH,
+        OAuthError,
+        load_tokens,
+        run_login_flow,
+    )
+    existing = load_tokens()
+    if existing is not None:
+        print("[brikie] An OpenAI login is already available "
+              "(reusing it; delete "
+              f"{BRIKIE_AUTH_PATH} or run again to replace it).")
+    try:
+        asyncio.run(run_login_flow())
+    except OAuthError as exc:
+        print(f"[brikie] Sign-in failed: {exc}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("\n[brikie] Sign-in cancelled.", file=sys.stderr)
+        return 1
+    print(f"[brikie] Signed in. Tokens saved to {BRIKIE_AUTH_PATH}.\n"
+          "         Use the 'OpenAI (ChatGPT login)' provider — e.g.\n"
+          "         brikie config  →  pick OpenAI (ChatGPT login).")
+    return 0
+
+
 def entry_point() -> None:
     """Synchronous entry point for ``brikie`` CLI command."""
     args = parse_args()
@@ -238,6 +269,8 @@ def entry_point() -> None:
     if args.command == "gateway":
         from brikie.gateway import run_gateway_command
         sys.exit(run_gateway_command(args.action or "status"))
+    if args.command == "login":
+        sys.exit(_run_login(args.action or "openai"))
     if args.command:
         print(f"[brikie] Unknown command '{args.command}'. Did you mean 'config'?",
               file=sys.stderr)

@@ -48,6 +48,7 @@ class ProviderPreset:
     probe_url: Optional[str]
     blurb: str
     base_url_env: Optional[str] = None  # runtime base-URL override env var
+    auth: Optional[str] = None  # "oauth" ⇒ ChatGPT sign-in, not a static key
 
 
 PRESETS: dict[str, ProviderPreset] = {
@@ -67,6 +68,14 @@ PRESETS: dict[str, ProviderPreset] = {
             key_env="OPENAI_API_KEY", probe_url=None,
             blurb="GPT models — needs an OpenAI API key",
             base_url_env="OPENAI_BASE_URL",
+        ),
+        ProviderPreset(
+            name="openai-oauth", label="OpenAI (ChatGPT login)",
+            base_url="https://api.openai.com/v1",
+            api_format="openai", default_model="gpt-5.5",
+            key_env=None, probe_url=None,
+            blurb="Sign in with your ChatGPT account — run `brikie login openai`",
+            base_url_env="OPENAI_BASE_URL", auth="oauth",
         ),
         ProviderPreset(
             name="openrouter", label="OpenRouter",
@@ -123,11 +132,17 @@ def preset_config(preset: ProviderPreset, model: str | None = None) -> dict[str,
         # Resolved by HTTPProvider at init() — sandboxed/managed runtimes
         # (e.g. OpenShell) reroute inference by setting this variable.
         base_url = f"env:{preset.base_url_env}|{preset.base_url}"
+    if preset.auth == "oauth":
+        api_key = "oauth:openai"      # dynamic refreshable bearer, not a key
+    elif preset.key_env:
+        api_key = f"env:{preset.key_env}"
+    else:
+        api_key = "not-needed"
     return {
         "model": model or preset.default_model,
         "base_url": base_url,
         "api_format": preset.api_format,
-        "api_key": f"env:{preset.key_env}" if preset.key_env else "not-needed",
+        "api_key": api_key,
     }
 
 

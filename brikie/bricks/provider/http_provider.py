@@ -60,6 +60,14 @@ class HTTPProvider(ProviderBrick):
         self._max_retries = max_retries
         self._retry_backoff = retry_backoff
         self._client: Optional[httpx.AsyncClient] = None
+        # Set in init() when api_key is an ``oauth:openai`` reference — a
+        # dynamic, refreshable bearer instead of a static key.
+        self._oauth_source: Optional[Any] = None
+
+    def _is_oauth(self) -> bool:
+        """True when this provider authenticates via OpenAI OAuth, not a key."""
+        return (self._api_format == self.FORMAT_OPENAI
+                and self._api_key.startswith("oauth:"))
 
     @property
     def name(self) -> str:
@@ -120,14 +128,23 @@ class HTTPProvider(ProviderBrick):
     async def init(self) -> None:
         """Initialize the async HTTP client."""
         self._base_url = self._resolve_ref(self._base_url).rstrip("/")
-        api_key = self._resolve_api_key()
-        if self._api_format == self.FORMAT_CLAUDE:
+        if self._is_oauth():
+            # OAuth: the Authorization header is dynamic (it refreshes), so
+            # it is injected per-request in _post(), not baked into the client.
+            from brikie.auth.openai_oauth import OpenAIOAuthSource
+            self._oauth_source = OpenAIOAuthSource()
+            headers = {"Content-Type": "application/json"}
+            logger.info("HTTPProvider %s using OpenAI OAuth (ChatGPT sign-in).",
+                        self._name)
+        elif self._api_format == self.FORMAT_CLAUDE:
+            api_key = self._resolve_api_key()
             headers = {
                 "Content-Type": "application/json",
                 "x-api-key": api_key,
                 "anthropic-version": "2023-06-01",
             }
         else:
+            api_key = self._resolve_api_key()
             headers = {
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {api_key}",
@@ -177,6 +194,20 @@ class HTTPProvider(ProviderBrick):
     # Request plumbing — translate transport failures into human advice
     # ------------------------------------------------------------------
 
+    async def _oauth_headers(self) -> Dict[str, str]:
+        """Per-request Authorization for OAuth mode (empty for static keys).
+
+        Returns a fresh bearer (refreshing if near expiry); a missing login
+        is turned into a friendly, actionable error.
+        """
+        if self._oauth_source is None:
+            return {}
+        from brikie.auth.openai_oauth import OAuthError
+        try:
+            return await self._oauth_source.headers()
+        except OAuthError as exc:
+            raise ProviderConnectionError(f"OpenAI OAuth: {exc}") from exc
+
     async def _post(self, path: str, payload: Dict[str, Any]) -> httpx.Response:
         """POST to the provider, retrying transient failures.
 
@@ -190,9 +221,13 @@ class HTTPProvider(ProviderBrick):
                 step, after retries are exhausted.
         """
         last_exc: Exception | None = None
+        auth_refreshed = False
         for attempt in range(self._max_retries + 1):
             try:
-                response = await self._client.post(path, json=payload)
+                extra_headers = await self._oauth_headers()
+                response = await self._client.post(
+                    path, json=payload, headers=extra_headers,
+                )
                 response.raise_for_status()
                 return response
             except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
@@ -219,6 +254,18 @@ class HTTPProvider(ProviderBrick):
                 ) from exc
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code
+                if (status == 401 and self._oauth_source is not None
+                        and not auth_refreshed):
+                    # An expired OAuth token — refresh once and retry before
+                    # giving up. (A stale cached access token that the server
+                    # rejected; the next attempt rebuilds the header.)
+                    auth_refreshed = True
+                    logger.info("OAuth token rejected (401) — refreshing.")
+                    try:
+                        await self._oauth_source.headers(force_refresh=True)
+                    except Exception:
+                        return self._raise_status_error(exc)
+                    continue
                 if status in (429, 500, 502, 503, 504) and attempt < self._max_retries:
                     last_exc = exc
                     delay = self._retry_backoff * (2 ** attempt)

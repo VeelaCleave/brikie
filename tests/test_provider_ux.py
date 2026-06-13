@@ -31,8 +31,14 @@ class TestPresets:
             assert preset.base_url.startswith("http")
             assert preset.api_format in ("openai", "claude")
             assert preset.label and preset.blurb
-            # hosted ⇒ key env var; local ⇒ probe URL
-            assert (preset.key_env is None) != (preset.probe_url is None)
+            # Exactly one auth mechanism: a key env var (hosted static key),
+            # a probe URL (local, no key), or OAuth (hosted ChatGPT sign-in).
+            mechanisms = [
+                preset.key_env is not None,
+                preset.probe_url is not None,
+                preset.auth == "oauth",
+            ]
+            assert sum(mechanisms) == 1, f"{preset.name}: need exactly one auth mechanism"
 
     def test_expected_presets_exist(self):
         assert {"anthropic", "openai", "openrouter", "groq",
