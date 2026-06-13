@@ -65,6 +65,7 @@ BRICK_INDEX: Dict[str, str] = {
 
     # ── Improvement Bricks (900-999) ──────────────────────────────────
     "BRK-900": "brikie.bricks.improvement.auto_fixer.AutoFixerBrick",
+    "BRK-910": "brikie.bricks.improvement.loop_detector.LoopDetectorBrick",
 }
 
 

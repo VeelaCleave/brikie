@@ -81,7 +81,7 @@ class TestBrickNumbers:
 
     def test_registry_count(self):
         """BRICK_NUMBERS dict covers all concrete bricks + ABCs."""
-        assert len(BRICK_NUMBERS) == 33
+        assert len(BRICK_NUMBERS) == 34
 
     def test_all_numbers_have_brk_prefix(self):
         """Every entry should start with BRK-."""

@@ -78,6 +78,7 @@ BRICK_NUMBERS: Dict[str, str] = {
 
     # ── Improvement Bricks (900-999) ──────────────────────────────────
     "AutoFixerBrick": "BRK-900",
+    "LoopDetectorBrick": "BRK-910",
 }
 
 

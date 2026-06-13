@@ -516,6 +516,11 @@ class EventLoop:
     async def _agent_loop(self) -> None:
         """Iterate provider calls and tool executions until the model answers."""
         for _step in range(MAX_AGENT_STEPS):
+            # An improvement brick (e.g. the loop detector) that caught the
+            # agent spinning stages a realignment nudge; inject it now so the
+            # model reads it on this very round instead of looping again.
+            await self._drain_realignments()
+
             # Re-collect every round, not just per turn: a brick seated by
             # registry_install/registry_create_brick mid-turn must be
             # callable in the very next model round.
@@ -562,6 +567,32 @@ class EventLoop:
         msg = f"Stopped after {MAX_AGENT_STEPS} tool steps without a final answer."
         self._message_history.append(Message(role="assistant", content=msg))
         await self._emit_assistant(msg)
+
+    async def _drain_realignments(self) -> None:
+        """Inject pending realignment nudges from improvement bricks.
+
+        Any registered brick exposing ``pop_realignment()`` (the loop
+        detector today) can stage a steering message when it observes the
+        agent spinning. We surface it to the model as a system turn AND to
+        the user — so a stuck local model is actively realigned rather than
+        having to notice the loop itself.
+        """
+        for brick in self._registry._bricks.values():
+            popper = getattr(brick, "pop_realignment", None)
+            if popper is None:
+                continue
+            try:
+                nudge = popper()
+            except Exception:
+                logger.exception("pop_realignment failed for %s", brick.name)
+                continue
+            if not nudge:
+                continue
+            self._message_history.append(Message(role="system", content=nudge))
+            logger.info("Injected realignment from %s: %s", brick.name, nudge)
+            for iface in self._registry.get_all(InterfaceBrick):
+                if hasattr(iface, "render_error"):
+                    await iface.render_error(f"↻ {nudge}")
 
     async def _execute_tool_round(self, raw_calls: List[Dict[str, Any]]) -> None:
         """Run one batch of tool calls through hooks and Tool Bricks."""
