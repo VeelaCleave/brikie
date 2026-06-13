@@ -23,6 +23,11 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from brikie.config.operating_discipline import discipline_block
 from brikie.config.types import HookEvent, HookType, Message, ToolCall
 from brikie.kernel.hooks import HookDispatcher
+from brikie.kernel.relevance_scorer import (
+    ScoredSector,
+    score_sectors,
+    split_into_sectors,
+)
 from brikie.kernel.registry import BrickRegistry, InterfaceBrick, ProviderBrick, ToolBrick
 from brikie.kernel.state import StateManager
 
@@ -830,7 +835,14 @@ class EventLoop:
         if discipline:
             messages.append({"role": "system", "content": discipline})
 
-        memory_blob = await self._build_memory_blob()
+        # Gather the current user message and active goal for relevance scoring
+        current_message = self._get_last_user_message()
+        active_goal = await self._get_active_goal_description()
+
+        memory_blob = await self._build_memory_blob(
+            user_message=current_message,
+            goal_description=active_goal,
+        )
         if memory_blob:
             messages.append({
                 "role": "system",
@@ -926,8 +938,41 @@ class EventLoop:
                 lines.append(f"[{role}] {m.content}")
         return "\n".join(lines)
 
-    async def _build_memory_blob(self) -> str:
+    def _get_last_user_message(self) -> str:
+        """Return the most recent user message text, or empty string."""
+        for m in reversed(self._message_history):
+            if m.role == "user":
+                return m.content or ""
+        return ""
+
+    async def _get_active_goal_description(self) -> str:
+        """Return the active goal as "title: detail", or "" if none.
+
+        Duck-typed: any seated brick exposing ``active_goal_context()``
+        (the GoalBrick does) answers. The kernel never imports or type-
+        checks the brick — it only probes for the capability (AGENTS #1).
+        """
+        for brick in self._registry._bricks.values():
+            getter = getattr(brick, "active_goal_context", None)
+            if getter is None:
+                continue
+            try:
+                return await getter() or ""
+            except Exception as exc:
+                logger.debug("Could not read active goal: %s", exc)
+                return ""
+        return ""
+
+    async def _build_memory_blob(
+        self,
+        user_message: str = "",
+        goal_description: str = "",
+    ) -> str:
         """Collect compressed context from memory-capable bricks, if any.
+
+        Uses relevance scoring against the current user message + active
+        goal to include only the most relevant memory sectors, within a
+        token budget. Irrelevant sectors are excluded.
 
         Each brick returns its own context shape. This method normalizes
         across the three memory brick types:
@@ -938,74 +983,36 @@ class EventLoop:
             {"mempalace": {entity_count, triple_count, ...}}
         - Wiki (page store):
             {"wiki": {page_count, recent_pages, ...}}
-
-        Each brick type gets its own section header so the LLM can
-        distinguish session memory from persistent knowledge.
         """
         memory_bricks = self._memory_capable_bricks()
         if not memory_bricks:
             return ""
 
         session_id = await self._state.get("session_id", "default")
-        context_parts: List[str] = []
+
+        # Step 1: Collect raw contexts from all bricks
+        all_sectors: List[ScoredSector] = []
         for brick in memory_bricks:
             ctx = await brick.build_context(session_id)
             if not ctx:
                 continue
-
             brick_name = getattr(brick, "name", "memory")
 
-            # LCM shape — DAG summaries + recent tail
-            summaries = ctx.get("summaries", [])
-            tail = ctx.get("tail", [])
-            if summaries:
-                context_parts.append(f"## Session Summary ({brick_name})")
-                for s in summaries:
-                    context_parts.append(
-                        f"[DAG depth={s.get('depth', 0)}] {s.get('content', '')}"
-                    )
-            if tail:
-                context_parts.append(f"## Recent Messages ({brick_name})")
-                for t in tail:
-                    context_parts.append(
-                        f"[{t.get('role', '?')}] {t.get('content', '')[:200]}"
-                    )
+            # Split this brick's context into independently-scorable sectors
+            all_sectors.extend(split_into_sectors(brick_name, ctx))
 
-            # MemPalace shape — knowledge graph stats
-            mempalace_ctx = ctx.get("mempalace")
-            if mempalace_ctx:
-                parts = [f"## Knowledge Graph ({brick_name})"]
-                ec = mempalace_ctx.get("entity_count", 0)
-                tc = mempalace_ctx.get("triple_count", 0)
-                parts.append(f"- {ec} entities, {tc} relationships")
-                # Include a few recent entities as context clues
-                entities = mempalace_ctx.get("recent_entities", [])
-                for ent in entities[:5]:
-                    name = ent.get("name", "?")
-                    etype = ent.get("entity_type", "?")
-                    desc = ent.get("description", "")
-                    if desc:
-                        parts.append(f"  - {name} ({etype}): {desc[:120]}")
-                    else:
-                        parts.append(f"  - {name} ({etype})")
-                context_parts.append("\n".join(parts))
+        if not all_sectors:
+            return ""
 
-            # Wiki shape — page store stats
-            wiki_ctx = ctx.get("wiki")
-            if wiki_ctx:
-                parts = [f"## Wiki Knowledge Base ({brick_name})"]
-                pc = wiki_ctx.get("page_count", 0)
-                parts.append(f"- {pc} pages")
-                recent = wiki_ctx.get("recent_pages", [])
-                if recent:
-                    parts.append("- Recent pages:")
-                    for p in recent[:5]:
-                        title = p.get("title", "?")
-                        status = p.get("status", "?")
-                        parts.append(f"  - {title} [{status}]")
-                context_parts.append("\n".join(parts))
+        # Score against the current request + active goal; keep only the
+        # relevant sectors within budget (score_sectors logs what it drops).
+        selected = score_sectors(
+            all_sectors,
+            user_message=user_message or self._get_last_user_message(),
+            goal_description=goal_description,
+        )
 
-        return "\n\n".join(context_parts)
+        return "\n\n".join(sector.formatted() for sector in selected)
 
     # ------------------------------------------------------------------
     # Tool Execution

@@ -34,8 +34,12 @@ do not repeat them.
 
 1. "Tests pass" is NOT done. Green unit tests with the feature unwired is
    the #1 failure here — a brick that passed 33 tests but was in no loader
-   map and no build set, so it never loaded. Before you claim done: wire it
-   in, then RUN THE REAL THING and watch it work end to end.
+   map and no build set, so it never loaded. Done means ALL of, every time:
+   - `python3 -m pytest -q` green (no skips you added)
+   - `python3 -m ruff check` CLEAN on every file you touched (a leftover
+     unused import or an undefined name means you never ran it)
+   - boot/RUN THE REAL THING and watch the feature work end to end
+   If you have not run all three, it is not done — do not say it is.
 
 2. Wiring a brick is not optional and not "later". When you add/modify a
    brick, ALL of these or it does not exist:
@@ -65,6 +69,15 @@ do not repeat them.
    results presented as real. If something failed, say it failed and show
    the output. Verify before you assert success — read the file, run the
    command, check the result; do not claim what you did not observe.
+
+7. Respect the layering — the kernel stays pure. `brikie/kernel/` imports
+   NOTHING from `brikie.bricks` (AGENTS.md rule #1). The kernel discovers
+   capabilities structurally (duck typing): probe `hasattr`/`getattr` for a
+   method, don't `import` a concrete brick or `isinstance` it. If the
+   kernel needs new data from a brick, add a duck-typed capability the
+   brick exposes — never a kernel→bricks import. A pure helper the kernel
+   uses lives under `brikie/kernel/` or `brikie/config/`, not under
+   `brikie/bricks/`.
 """
 
 

@@ -147,6 +147,18 @@ class GoalBrick(ToolBrick):
         await self._store.shutdown()
         await super().shutdown()
 
+    async def active_goal_context(self) -> str:
+        """Return the latest active goal as ``"title: detail"`` (or "").
+
+        A duck-typed capability the kernel probes for (without importing
+        this class) to anchor dynamic memory recall to the current goal.
+        """
+        goal = await self._store.latest_active_goal()
+        if not goal:
+            return ""
+        parts = [p for p in (goal.get("title"), goal.get("detail")) if p]
+        return ": ".join(parts)
+
     async def execute(self, name: str, args: Dict[str, Any]) -> Any:
         """Dispatch a goal tool.
 
