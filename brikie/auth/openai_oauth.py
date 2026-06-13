@@ -302,76 +302,115 @@ def build_authorize_url(challenge: str, state: str,
     })
 
 
-def _capture_code(port: int, expected_state: str, timeout: float) -> str:
-    """Run a one-shot localhost server that captures the OAuth callback code.
+def parse_callback(url_or_query: str) -> Tuple[str, str]:
+    """Extract (code, state) from a pasted redirect URL or raw query string.
 
-    Blocking; meant to be called via ``asyncio.to_thread``. Returns the code
-    or raises OAuthError on error/mismatch/timeout.
+    Tolerant of a full ``http://localhost:1455/auth/callback?...`` URL or just
+    the ``code=...&state=...`` part. Raises on an explicit ``error=``.
+    """
+    from urllib.parse import parse_qs, urlparse
+
+    s = (url_or_query or "").strip().strip("'\"")
+    parsed = urlparse(s)
+    q = parse_qs(parsed.query or s)
+    error = (q.get("error") or [""])[0]
+    if error:
+        raise OAuthError(f"sign-in was denied: {error}")
+    return (q.get("code") or [""])[0], (q.get("state") or [""])[0]
+
+
+def _serve_callback(port: int, result: Dict[str, str], stop) -> None:
+    """Background daemon: catch the OAuth redirect on localhost, fill *result*.
+
+    Best-effort — if the port can't be bound (in use, or unreachable from the
+    browser) the manual paste path still completes the flow.
     """
     import http.server
     from urllib.parse import parse_qs, urlparse
 
-    captured: Dict[str, str] = {}
-
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802
             q = parse_qs(urlparse(self.path).query)
-            captured["error"] = (q.get("error") or [""])[0]
-            captured["state"] = (q.get("state") or [""])[0]
-            captured["code"] = (q.get("code") or [""])[0]
+            result["code"] = (q.get("code") or [""])[0]
+            result["state"] = (q.get("state") or [""])[0]
+            result["error"] = (q.get("error") or [""])[0]
+            ok = result["code"] and not result["error"]
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
             self.end_headers()
-            ok = captured["code"] and not captured["error"]
             self.wfile.write(
                 b"<html><body style='font-family:sans-serif'>"
                 b"<h2>brikie: sign-in " + (b"complete" if ok else b"failed")
-                + b"</h2><p>You can close this tab and return to the terminal.</p>"
-                b"</body></html>"
-            )
+                + b"</h2><p>You can close this tab and return to the terminal."
+                b"</p></body></html>")
 
-        def log_message(self, *_args):  # silence the default stderr logging
+        def log_message(self, *_a):  # silence default stderr logging
             pass
 
-    server = http.server.HTTPServer(("127.0.0.1", port), Handler)
-    server.timeout = timeout
     try:
-        server.handle_request()  # serve exactly one request (the redirect)
+        server = http.server.HTTPServer(("127.0.0.1", port), Handler)
+    except OSError:
+        result["bind_error"] = "1"
+        return
+    server.timeout = 1.0
+    try:
+        while not stop.is_set() and "code" not in result:
+            server.handle_request()
     finally:
         server.server_close()
 
-    if not captured:
-        raise OAuthError("no OAuth callback received before timeout.")
-    if captured.get("error"):
-        raise OAuthError(f"sign-in was denied: {captured['error']}")
-    if captured.get("state") != expected_state:
-        raise OAuthError("OAuth state mismatch — possible CSRF; aborting.")
-    if not captured.get("code"):
-        raise OAuthError("OAuth callback carried no authorization code.")
-    return captured["code"]
-
 
 async def run_login_flow(open_browser: bool = True, timeout: float = 300.0) -> OAuthTokens:
-    """Full interactive 'Sign in with ChatGPT' flow; returns saved tokens.
+    """Interactive 'Sign in with ChatGPT' flow; returns saved tokens.
 
-    NOTE: needs a browser and an open localhost port; cannot run headless in a
-    sandbox. Verify on a real machine.
+    Robust to localhost not being reachable (SSH / remote / container): a
+    background server catches the redirect when it can, and the user can paste
+    the redirected URL otherwise. The PKCE verifier stays in scope for both.
     """
     import asyncio
+    import threading
     import webbrowser
 
     verifier, challenge = generate_pkce()
     state = secrets.token_urlsafe(24)
     url = build_authorize_url(challenge, state)
 
-    print(f"\nOpen this URL to sign in with your ChatGPT account:\n  {url}\n")
+    print("\nSign in with your ChatGPT account:\n")
+    print(f"  {url}\n")
+    print("After you approve, you'll be sent back automatically. If your "
+          "browser shows a\n'can't reach localhost' page instead, copy that "
+          "URL and paste it below.\n")
     if open_browser:
         try:
             webbrowser.open(url)
         except Exception:
             pass
 
-    code = await asyncio.to_thread(_capture_code, REDIRECT_PORT, state, timeout)
+    result: Dict[str, str] = {}
+    stop = threading.Event()
+    server_thread = threading.Thread(
+        target=_serve_callback, args=(REDIRECT_PORT, result, stop), daemon=True)
+    server_thread.start()
+    try:
+        pasted = await asyncio.to_thread(
+            input, "Press Enter once your browser shows success — "
+                   "or paste the redirected URL here: ")
+    finally:
+        stop.set()
+
+    if result.get("error"):
+        raise OAuthError(f"sign-in was denied: {result['error']}")
+    code = result.get("code") or ""
+    got_state = result.get("state") or ""
+    if not code and pasted.strip():
+        code, got_state = parse_callback(pasted)
+    if not code:
+        raise OAuthError(
+            "sign-in not completed — no authorization code received. "
+            "Run `brikie login openai` again.")
+    if got_state and got_state != state:
+        raise OAuthError("state mismatch — please run the sign-in again.")
+
     tokens = await exchange_code(code, verifier)
     logger.info("OpenAI sign-in complete; tokens saved to %s", BRIKIE_AUTH_PATH)
     return tokens

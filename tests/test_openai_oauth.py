@@ -65,6 +65,24 @@ class TestClientId:
         assert oa.client_id() == "brikie_app_123"
 
 
+class TestCallbackParsing:
+    def test_parses_full_redirect_url(self):
+        # The exact shape a real ChatGPT sign-in redirects to.
+        url = ("http://localhost:1455/auth/callback?code=ac_ABC123.xyz"
+               "&scope=openid+profile+email+offline_access&state=STATE99")
+        code, state = oa.parse_callback(url)
+        assert code == "ac_ABC123.xyz"
+        assert state == "STATE99"
+
+    def test_parses_bare_query_and_quotes(self):
+        code, state = oa.parse_callback("'code=c1&state=s1'")
+        assert code == "c1" and state == "s1"
+
+    def test_error_in_callback_raises(self):
+        with pytest.raises(oa.OAuthError):
+            oa.parse_callback("http://localhost:1455/auth/callback?error=access_denied")
+
+
 class TestPKCE:
     def test_verifier_and_challenge_are_valid_s256(self):
         import hashlib
