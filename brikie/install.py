@@ -85,6 +85,7 @@ CATALOG: Dict[str, List[CatalogEntry]] = {
     "Security Bricks": [
         CatalogEntry("BRK-800", "Command Firewall", "Block destructive shell commands"),
         CatalogEntry("BRK-810", "Sandbox", "Isolated execution environment", dev=True),
+        CatalogEntry("BRK-820", "Watchdog", "LLM-based reviewer that gates risky tool calls", dev=True),
     ],
     "Improvement Bricks": [
         CatalogEntry("BRK-900", "Auto-Fixer", "Repair malformed tool calls without an LLM round-trip", dev=True),

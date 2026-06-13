@@ -62,6 +62,7 @@ BRICK_INDEX: Dict[str, str] = {
     # ── Security Bricks (800-899) ─────────────────────────────────────
     "BRK-800": "brikie.bricks.security.firewall.CommandFirewallBrick",
     "BRK-810": "brikie.bricks.security.sandbox.SandboxSecurityBrick",
+    "BRK-820": "brikie.bricks.security.watchdog.WatchdogSecurityBrick",
 
     # ── Improvement Bricks (900-999) ──────────────────────────────────
     "BRK-900": "brikie.bricks.improvement.auto_fixer.AutoFixerBrick",

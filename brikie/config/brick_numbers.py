@@ -75,6 +75,7 @@ BRICK_NUMBERS: Dict[str, str] = {
     # ── Security Bricks (800-899) ─────────────────────────────────────
     "CommandFirewallBrick": "BRK-800",
     "SandboxSecurityBrick": "BRK-810",
+    "WatchdogSecurityBrick": "BRK-820",
 
     # ── Improvement Bricks (900-999) ──────────────────────────────────
     "AutoFixerBrick": "BRK-900",

@@ -15,6 +15,7 @@ from brikie.bricks.provider.http_provider import HTTPProvider
 from brikie.bricks.registry.installer import RegistryInstallerBrick
 from brikie.bricks.security.firewall import CommandFirewallBrick
 from brikie.bricks.security.sandbox import SandboxSecurityBrick
+from brikie.bricks.security.watchdog import WatchdogSecurityBrick
 from brikie.bricks.soul.crypto_trading_agent import CryptoTradingAgent
 from brikie.bricks.soul.dreamer import Dreamer
 from brikie.bricks.soul.foreman import Foreman
@@ -55,6 +56,7 @@ _CONCRETE_BRICKS = [
     (DiagnosticsCollectorBrick, "BRK-720"),
     (CommandFirewallBrick, "BRK-800"),
     (SandboxSecurityBrick, "BRK-810"),
+    (WatchdogSecurityBrick, "BRK-820"),
     (AutoFixerBrick, "BRK-900"),
 ]
 
@@ -81,7 +83,7 @@ class TestBrickNumbers:
 
     def test_registry_count(self):
         """BRICK_NUMBERS dict covers all concrete bricks + ABCs."""
-        assert len(BRICK_NUMBERS) == 34
+        assert len(BRICK_NUMBERS) == 35
 
     def test_all_numbers_have_brk_prefix(self):
         """Every entry should start with BRK-."""

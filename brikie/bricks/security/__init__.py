@@ -8,6 +8,7 @@ Import concrete bricks directly from their modules:
 
     from brikie.bricks.security.firewall import CommandFirewallBrick
     from brikie.bricks.security.sandbox import SandboxSecurityBrick
+    from brikie.bricks.security.watchdog import WatchdogSecurityBrick
 """
 
 from brikie.bricks.security.base import SecurityBrick, SecurityDecision, BlockedCommand
