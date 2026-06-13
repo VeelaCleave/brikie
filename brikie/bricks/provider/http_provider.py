@@ -282,6 +282,16 @@ class HTTPProvider(ProviderBrick):
     def _raise_status_error(self, exc: httpx.HTTPStatusError) -> Any:
         """Map a non-retryable HTTP status to a friendly ProviderConnectionError."""
         status = exc.response.status_code
+        if self._oauth_source is not None and status in (401, 403, 500):
+            raise ProviderConnectionError(
+                f"{self._base_url} returned HTTP {status} for your ChatGPT "
+                "sign-in. That login only grants model access with a PAID "
+                "ChatGPT plan (Plus/Pro/Business) — a free account can sign in "
+                "but can't call the API. With a paid plan, brikie needs the "
+                "ChatGPT backend endpoint wired (open an issue). Otherwise pick "
+                "a different provider: your local model, Groq/OpenRouter free "
+                "tiers, or a pay-as-you-go OpenAI API key."
+            ) from exc
         if status in (401, 403):
             hint = (
                 "your API key was rejected. Check the key (and that the "
