@@ -48,7 +48,11 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
+from pathlib import Path
+
 from brikie.bricks.tool.base import ToolBrick
+from brikie.bricks.tool.file_tools import ShellToolBrick
+from brikie.bricks.tool.swarm import workspace as ws_mod
 from brikie.bricks.tool.swarm.swarm_store import SwarmStore
 from brikie.kernel.registry import ProviderBrick, ToolBrick as ToolBrickABC
 from brikie.kernel.registry import InterfaceBrick
@@ -235,9 +239,16 @@ class SwarmToolBrick(ToolBrick):
         auto_review: bool = True,
         subagent_timeout: float = 180.0,
         max_total_tokens: int = 0,
+        isolate_coders: bool = True,
+        workspace_root: Optional[str] = None,
     ) -> None:
         super().__init__()
         self._name = "swarm"
+        # Phase 2: each coder works in its own git worktree (when in a repo),
+        # so parallel coders can't clobber one shared tree. workspace_root
+        # defaults to the process cwd at dispatch time.
+        self._isolate_coders = isolate_coders
+        self._workspace_root = workspace_root
         self._registry = registry
         self._hooks = hooks
         self._store = SwarmStore(db_path)
@@ -361,10 +372,16 @@ class SwarmToolBrick(ToolBrick):
         await sink({"kind": "dispatch", "role": "swarm",
                     "count": len(tasks), "roles": roles_summary})
 
+        repo_root = Path(self._workspace_root or Path.cwd())
+        workspaces: Dict[int, Any] = {}        # task index → Workspace (coders)
+
         runners_and_tasks = []
         for i, (role, task_text) in enumerate(tasks):
             sender = f"{role}#{i + 1}"
-            execute_tool = self._make_tool_executor(board=board, sender=sender)
+            workspace_tool, iso_note = await self._provision_coder(
+                role, sender, repo_root, workspaces, i)
+            execute_tool = self._make_tool_executor(
+                board=board, sender=sender, workspace_tool=workspace_tool)
             runner = SubAgentRunner(
                 provider=provider,
                 tool_schemas=sub_schemas,
@@ -376,7 +393,8 @@ class SwarmToolBrick(ToolBrick):
                 on_event=sink,
                 budget=budget,
             )
-            full_task = f"{briefing}{task_text}" if briefing else task_text
+            body = iso_note + task_text
+            full_task = f"{briefing}{body}" if briefing else body
             runners_and_tasks.append((runner, self._role_prompt(role), full_task))
 
         logger.info("Swarm %s dispatching %d sub-agent(s).", run_id, len(tasks))
@@ -384,9 +402,21 @@ class SwarmToolBrick(ToolBrick):
                                   max_parallel=self._max_parallel,
                                   timeout=self._subagent_timeout)
 
+        # Capture each isolated coder's patch BEFORE review (so the reviewer
+        # judges the actual diff) and before it's applied.
+        for i, ws in workspaces.items():
+            results[i].isolated = ws.isolated
+            if ws.isolated:
+                results[i].workspace_diff = await ws.diff()
+
         if do_review:
             await self._auto_review_coders(results, provider, base_schemas,
                                            sink=sink, budget=budget)
+
+        # Reconcile isolated work back into the real tree: apply each
+        # successful coder's patch sequentially; an overlapping one is
+        # reported as a conflict, never silently merged. Then clean up.
+        await self._reconcile_workspaces(workspaces, results, repo_root, sink)
 
         # Persist + surface each outcome in the active goal's progress log.
         for i, result in enumerate(results):
@@ -454,12 +484,20 @@ class SwarmToolBrick(ToolBrick):
                 on_event=sink,
                 budget=budget,
             )
+            diff_section = ""
+            if r.isolated and r.workspace_diff.strip():
+                # The coder worked in isolation; review its actual patch.
+                diff_section = (
+                    "\nThe exact changes it made (unified diff), which will be "
+                    "applied to the tree if you approve:\n```diff\n"
+                    f"{r.workspace_diff[:6000]}\n```\n")
             review_task = (
                 "Review another sub-agent's completed work for correctness "
                 "and completeness. Inspect it (read the relevant files or run "
                 "checks) — do not take the report at face value.\n\n"
                 f"The task it was given:\n{r.task}\n\n"
-                f"Its report:\n{r.report}\n\n"
+                f"Its report:\n{r.report}\n"
+                f"{diff_section}\n"
                 "Finish with a verdict line: 'REVIEW: PASS' if the work is "
                 "correct and complete, or 'REVIEW: FAIL — <specific problems>' "
                 "if not."
@@ -476,6 +514,64 @@ class SwarmToolBrick(ToolBrick):
             # dispatch total stays honest.
             results[idx].tokens_in += rev.tokens_in
             results[idx].tokens_out += rev.tokens_out
+
+    # ------------------------------------------------------------------
+    # Isolated coder workspaces (Phase 2)
+    # ------------------------------------------------------------------
+
+    async def _provision_coder(
+        self, role: str, sender: str, repo_root: Any,
+        workspaces: Dict[int, Any], index: int,
+    ) -> tuple:
+        """Provision an isolated workspace for a coder; (workspace_tool, note).
+
+        Returns a root-scoped ShellToolBrick the coder's file/shell tools are
+        routed to (or None when not isolating) and a task-preamble note. Non-
+        coder roles, or when isolation is off/unavailable, get (None, "").
+        """
+        if role != "coder" or not self._isolate_coders:
+            return None, ""
+        ws = await ws_mod.provision(repo_root, sender)
+        workspaces[index] = ws
+        if not ws.isolated:
+            return None, ""
+        tool = ShellToolBrick(root=str(ws.path), allowed_dirs=[str(ws.path)])
+        await tool.init()
+        note = (
+            "You are working in an ISOLATED copy of the project (your own git "
+            "worktree). Use RELATIVE file paths. Your changes are captured and "
+            "merged back into the real tree only if they don't conflict with "
+            "another sub-agent's — so stay within the scope you were given.\n\n"
+        )
+        return tool, note
+
+    async def _reconcile_workspaces(
+        self, workspaces: Dict[int, Any], results: List[SubAgentResult],
+        repo_root: Any, sink: Any,
+    ) -> None:
+        """Apply each successful coder's patch to the real tree, then clean up.
+
+        Patches are applied in order; the first to touch a hunk wins and any
+        overlapping patch is recorded as a conflict (the real tree is left
+        untouched by a failed apply). Worktrees are always removed.
+        """
+        for i, ws in workspaces.items():
+            r = results[i]
+            try:
+                if ws.isolated and r.ok and r.workspace_diff.strip():
+                    applied, detail = await ws.apply_to(repo_root)
+                    r.workspace_applied = applied
+                    if not applied:
+                        r.workspace_conflict = detail
+                    await sink({
+                        "kind": "workspace", "role": r.role,
+                        "text": (f"{r.role} changes "
+                                 + ("merged" if applied else f"CONFLICT: {detail[:80]}")),
+                    })
+            except Exception:
+                logger.exception("workspace reconcile failed for task %d", i)
+            finally:
+                await ws.cleanup()
 
     # ------------------------------------------------------------------
     # Live event streaming
@@ -622,16 +718,24 @@ class SwarmToolBrick(ToolBrick):
                 schemas.append(s)
         return schemas
 
-    def _make_tool_executor(self, board: Any = None, sender: str = ""):
+    def _make_tool_executor(self, board: Any = None, sender: str = "",
+                            workspace_tool: Any = None):
         """Build the (name, args) -> str executor backed by the registry.
 
         When a ``board`` is supplied, the collaboration tools
-        (swarm_share / swarm_inbox) are handled in-process against it;
-        everything else routes to the first non-swarm Tool Brick that
-        advertises the call. Errors are returned as strings (never raised)
-        so one bad call can't crash a sub-agent.
+        (swarm_share / swarm_inbox) are handled in-process against it. When a
+        ``workspace_tool`` (a root-scoped ShellToolBrick) is supplied, this
+        coder's file/shell tools route to THAT instance so its edits land in
+        its isolated worktree, not the shared tree. Everything else routes to
+        the first non-swarm Tool Brick that advertises the call. Errors are
+        returned as strings (never raised) so one bad call can't crash a
+        sub-agent.
         """
         registry = self._registry
+        ws_names = {
+            s.get("function", {}).get("name")
+            for s in (getattr(workspace_tool, "tools", None) or [])
+        } if workspace_tool is not None else set()
 
         async def execute_tool(name: str, args: Dict[str, Any]) -> str:
             if board is not None and name == "swarm_share":
@@ -645,6 +749,13 @@ class SwarmToolBrick(ToolBrick):
                 if not msgs:
                     return "No notes from other sub-agents yet."
                 return "\n".join(f"[{m['from']}] {m['note']}" for m in msgs)
+
+            # An isolated coder's file/shell tools hit its own worktree.
+            if name in ws_names:
+                try:
+                    return str(await workspace_tool.execute(name, args))
+                except Exception as exc:
+                    return f"Tool error ({type(exc).__name__}): {exc}"
 
             if registry is None:
                 return f"No registry available to run tool '{name}'"

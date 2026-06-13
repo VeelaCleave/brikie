@@ -104,7 +104,8 @@ async def _make_brick(tmp_path, provider=None, tools=None, extra=None):
     tools = tools if tools is not None else [FakeToolBrick("files", ["read_file"])]
     reg = FakeRegistry([provider], tools, extra=extra)
     brick = SwarmToolBrick(registry=reg, hooks=None,
-                           db_path=str(tmp_path / "swarm.db"))
+                           db_path=str(tmp_path / "swarm.db"),
+                           isolate_coders=False)   # Phase-2 isolation tested separately
     # register self in the fake registry's tool list (mirrors real boot)
     reg._tools.append(brick)
     reg._bricks["swarm"] = brick

@@ -254,12 +254,26 @@ class ShellToolBrick(ToolBrick):
         allowed_dirs: Optional[List[str]] = None,
         max_read_lines: int = 2000,
         max_bash_timeout: int = 300,
+        root: Optional[str] = None,
     ) -> None:
         super().__init__()
         self._name = "shell_tool"
         self._allowed_dirs: List[Path] = [Path(d).resolve() for d in (allowed_dirs or _DEFAULT_ALLOWED_DIRS)]
         self._max_read_lines = max_read_lines
         self._max_bash_timeout = max_bash_timeout
+        # Optional sandbox root (opt-in; default None = unchanged behavior).
+        # When set, RELATIVE file paths resolve under it and bash defaults its
+        # working directory to it — so concurrent agents given different roots
+        # (e.g. swarm coders in separate git worktrees) can't clobber each
+        # other through one shared cwd.
+        self._root: Optional[Path] = Path(root).resolve() if root else None
+
+    def _resolve_path(self, raw: str) -> Path:
+        """Resolve a file-path argument, honouring the sandbox root if set."""
+        p = Path(raw).expanduser()
+        if self._root is not None and not p.is_absolute():
+            return (self._root / p).resolve()
+        return p.resolve()
 
     @property
     def name(self) -> str:
@@ -288,7 +302,7 @@ class ShellToolBrick(ToolBrick):
         """Run a shell command in a subprocess."""
         command = args.get("command", "")
         timeout = min(args.get("timeout", 30), self._max_bash_timeout)
-        workdir = args.get("workdir")
+        workdir = args.get("workdir") or (str(self._root) if self._root else None)
 
         if not isinstance(command, str) or not command.strip():
             return {"error": "No command provided."}
@@ -365,7 +379,7 @@ class ShellToolBrick(ToolBrick):
         if not file_path:
             return {"error": "No filePath provided."}
 
-        path = Path(file_path).expanduser().resolve()
+        path = self._resolve_path(file_path)
         if not path.exists():
             return {"error": f"File not found: {file_path}"}
         if not path.is_file():
@@ -417,7 +431,7 @@ class ShellToolBrick(ToolBrick):
         if content is None:
             content = ""
 
-        path = Path(file_path).expanduser().resolve()
+        path = self._resolve_path(file_path)
 
         # Block writing to sensitive system paths
         sensitive_prefixes = [
@@ -468,7 +482,7 @@ class ShellToolBrick(ToolBrick):
         if new_string is None:
             new_string = ""
 
-        path = Path(file_path).expanduser().resolve()
+        path = self._resolve_path(file_path)
         if not path.exists():
             return {"error": f"File not found: {file_path}"}
         if not path.is_file():
@@ -545,7 +559,8 @@ class ShellToolBrick(ToolBrick):
         if not pattern:
             return {"error": "No pattern provided."}
 
-        base = Path(search_path).expanduser().resolve() if search_path else Path.cwd()
+        base = (self._resolve_path(search_path) if search_path
+                else (self._root or Path.cwd()))
         if not base.exists():
             return {"error": f"Path does not exist: {search_path}"}
 
@@ -631,7 +646,7 @@ class ShellToolBrick(ToolBrick):
         if not file_path:
             return {"error": "No filePath provided."}
 
-        path = Path(file_path).expanduser().resolve()
+        path = self._resolve_path(file_path)
         if not path.exists():
             return {"error": f"Path not found: {file_path}"}
 

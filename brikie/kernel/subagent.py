@@ -91,6 +91,12 @@ class SubAgentResult:
     reviewed: bool = False
     review_ok: bool = False
     review: str = ""
+    # Set for an isolated coder (Phase 2): its captured patch and how it
+    # landed back in the real tree.
+    isolated: bool = False
+    workspace_diff: str = ""
+    workspace_applied: bool = False
+    workspace_conflict: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         out = {
@@ -110,6 +116,15 @@ class SubAgentResult:
             out["reviewed"] = True
             out["review_ok"] = self.review_ok
             out["review"] = self.review
+        if self.isolated:
+            out["isolated"] = True
+            out["workspace_applied"] = self.workspace_applied
+            if self.workspace_conflict:
+                out["workspace_conflict"] = self.workspace_conflict
+            if self.workspace_diff:
+                # A compact signal, not the whole patch, to keep the model's
+                # context lean — the full patch is on the result object.
+                out["workspace_diff_lines"] = self.workspace_diff.count("\n")
         return out
 
 
