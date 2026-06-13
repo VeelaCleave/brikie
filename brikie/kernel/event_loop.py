@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from brikie.config.operating_discipline import discipline_block
 from brikie.config.types import HookEvent, HookType, Message, ToolCall
 from brikie.kernel.hooks import HookDispatcher
+from brikie.recovery import write_context_dump
 from brikie.kernel.relevance_scorer import (
     ScoredSector,
     score_sectors,
@@ -38,6 +39,11 @@ logger = logging.getLogger(__name__)
 
 # Max provider→tool→provider iterations per user turn.
 MAX_AGENT_STEPS = 500
+
+# How many consecutive turns may crash with an unexpected error before the
+# loop gives up. One bad turn shouldn't kill a long autonomous run, but an
+# error that recurs every turn (a wedged state) must stop, not spin forever.
+MAX_CONSECUTIVE_BREAKDOWNS = 3
 
 # Context budget (estimated tokens of the verbatim history). Over this, the
 # oldest turns are folded into a faithful LLM summary so a long, tool-heavy
@@ -166,9 +172,26 @@ class EventLoop:
                 f"({self._resumed_count} messages restored).",
             )
 
+        consecutive_breakdowns = 0
         try:
             while True:
-                await self._turn()
+                try:
+                    await self._turn()
+                    consecutive_breakdowns = 0
+                except (KeyboardInterrupt, EOFError):
+                    raise
+                except Exception as exc:
+                    # An unexpected error escaped a turn. Don't die with a
+                    # bare traceback — dump a resumable snapshot, tell the
+                    # user, and keep going unless it keeps recurring.
+                    consecutive_breakdowns += 1
+                    await self._handle_breakdown(exc, consecutive_breakdowns)
+                    if consecutive_breakdowns >= MAX_CONSECUTIVE_BREAKDOWNS:
+                        logger.error(
+                            "Stopping after %d consecutive breakdowns.",
+                            consecutive_breakdowns,
+                        )
+                        break
         except KeyboardInterrupt:
             logger.info("KeyboardInterrupt — shutting down.")
         finally:
@@ -220,6 +243,106 @@ class EventLoop:
                 await brick.shutdown()
             except Exception:
                 logger.exception("Error shutting down brick %s", brick.name)
+
+    # ------------------------------------------------------------------
+    # Breakdown recovery — a crashed turn writes a resumable dump
+    # ------------------------------------------------------------------
+
+    async def _handle_breakdown(self, exc: Exception, consecutive: int) -> None:
+        """Write a context dump for a crashed turn and tell the user.
+
+        The conversation state lives in the memory bricks (so ``--continue``
+        can resume); this captures the *why* — the error, the active goal,
+        and the recent exchange — into a report a human or supervisor can
+        read, then surfaces a plain-language message instead of a traceback.
+        """
+        logger.exception(
+            "Unexpected error in turn (breakdown %d/%d): %s",
+            consecutive, MAX_CONSECUTIVE_BREAKDOWNS, exc,
+        )
+        ctx = self._collect_breakdown_context(exc, consecutive)
+        try:
+            ctx["active_goal"] = await self._get_active_goal_description()
+        except Exception:
+            ctx["active_goal"] = ""
+        try:
+            ctx["session_id"] = await self._state.get("session_id", "default")
+        except Exception:
+            ctx["session_id"] = "default"
+
+        dump_path = write_context_dump(ctx)
+        where = f" A recovery report was saved to {dump_path}." if dump_path else ""
+        if consecutive >= MAX_CONSECUTIVE_BREAKDOWNS:
+            msg = (
+                f"brikie stopped after {consecutive} repeated errors "
+                f"({type(exc).__name__}: {exc}).{where} "
+                "Resume with `brikie --continue` once the cause is fixed."
+            )
+        else:
+            msg = (
+                f"brikie hit an unexpected error ({type(exc).__name__}: {exc}) "
+                f"and recovered.{where} The conversation can continue."
+            )
+        await self._emit_breakdown(msg)
+
+    async def _emit_breakdown(self, msg: str) -> None:
+        """Surface a breakdown message through every interface."""
+        for iface in self._registry.get_all(InterfaceBrick):
+            try:
+                if hasattr(iface, "render_error"):
+                    await iface.render_error(msg)
+                elif hasattr(iface, "output"):
+                    await iface.output(msg)
+            except Exception:
+                logger.debug(
+                    "Could not surface breakdown via %s",
+                    getattr(iface, "name", "?"), exc_info=True,
+                )
+
+    def _collect_breakdown_context(
+        self, exc: Exception, consecutive: int,
+    ) -> Dict[str, Any]:
+        """Gather a snapshot of agent state at the moment of a crash."""
+        import traceback
+
+        providers = self._registry.get_all(ProviderBrick)
+        model = next((p.model for p in providers if hasattr(p, "model")), "—")
+        recent = self._message_history[-12:]
+        return {
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+            "traceback": "".join(
+                traceback.format_exception(type(exc), exc, exc.__traceback__)
+            ),
+            "model": model,
+            "bricks": [b.name for b in self._registry._bricks.values()],
+            "quarantined": getattr(self, "_quarantined", []),
+            "tokens_in": self._tokens_in,
+            "tokens_out": self._tokens_out,
+            "history_len": len(self._message_history),
+            "recent_messages": [self._render_message_line(m) for m in recent],
+            "consecutive": consecutive,
+        }
+
+    @staticmethod
+    def _render_message_line(m: Message) -> str:
+        """One-line markdown rendering of a history message for the dump."""
+        role = getattr(m, "role", "?")
+        content = (getattr(m, "content", "") or "").strip().replace("\n", " ")
+        if len(content) > 300:
+            content = content[:300] + "…"
+        suffix = ""
+        tool_calls = getattr(m, "tool_calls", None)
+        if tool_calls:
+            names = []
+            for tc in tool_calls:
+                if isinstance(tc, dict):
+                    names.append(
+                        tc.get("function", {}).get("name") or tc.get("name") or "?"
+                    )
+            if names:
+                suffix = f" _[called: {', '.join(names)}]_"
+        return f"- **{role}**: {content or '(no text)'}{suffix}"
 
     async def _restore_history(self) -> None:
         """Repopulate the conversation from a memory brick (``--continue``).

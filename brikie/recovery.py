@@ -17,9 +17,12 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 LAST_GOOD_FILE = Path.home() / ".brikie" / "last-good-set"
+BREAKDOWN_DIR = Path.home() / ".brikie" / "breakdowns"
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +58,83 @@ def summarize_quarantine(quarantined: list) -> str:
         return ""
     items = ", ".join(f"{name} ({err})" for name, err in quarantined)
     return f"Skipped {len(quarantined)} brick(s) that failed to load: {items}"
+
+
+def write_context_dump(ctx: Dict[str, Any]) -> Optional[Path]:
+    """Write a resumable breakdown report and return its path (or None).
+
+    When a turn crashes with an unexpected error, the agent's state isn't
+    lost in a traceback — this writes a human- and supervisor-readable
+    markdown snapshot (the error, the active goal, recent conversation,
+    loaded bricks, how to resume) to ``~/.brikie/breakdowns/`` and refreshes
+    a ``latest.md`` pointer. Best-effort: failure to write is swallowed —
+    a broken dump must never compound the breakdown it's reporting.
+    """
+    try:
+        BREAKDOWN_DIR.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        path = BREAKDOWN_DIR / f"breakdown-{ts}.md"
+        body = _render_dump(ctx, ts)
+        path.write_text(body)
+        (BREAKDOWN_DIR / "latest.md").write_text(body)
+        return path
+    except Exception:
+        logger.debug("Could not write context dump", exc_info=True)
+        return None
+
+
+def _render_dump(ctx: Dict[str, Any], ts: str) -> str:
+    """Render the breakdown context dict into a markdown report."""
+    def section(title: str, body: str) -> str:
+        return f"## {title}\n{body}\n"
+
+    goal = ctx.get("active_goal") or "_(no active goal set)_"
+    quarantined: List = ctx.get("quarantined") or []
+    quarantine_line = (
+        ", ".join(f"{n} ({e})" for n, e in quarantined)
+        if quarantined else "none"
+    )
+    messages: List[str] = ctx.get("recent_messages") or []
+    convo = "\n".join(messages) if messages else "_(no conversation captured)_"
+
+    parts = [
+        f"# Brikie breakdown report — {ts}",
+        "",
+        "Brikie hit an unexpected error during a turn. Conversation state is "
+        "preserved by the memory bricks; resume with `brikie --continue`.",
+        "",
+        section(
+            "What broke",
+            f"- **{ctx.get('error_type', 'Error')}**: "
+            f"{ctx.get('error_message', '(no message)')}\n"
+            f"- Consecutive breakdowns: {ctx.get('consecutive', 1)}",
+        ),
+        section("Active goal", goal),
+        section(
+            "Session",
+            f"- session_id: `{ctx.get('session_id', 'default')}`\n"
+            f"- model: `{ctx.get('model', '—')}`\n"
+            f"- bricks: {', '.join(ctx.get('bricks', [])) or 'none'}\n"
+            f"- quarantined at boot: {quarantine_line}\n"
+            f"- tokens: in={ctx.get('tokens_in', 0)} "
+            f"out={ctx.get('tokens_out', 0)}; "
+            f"history={ctx.get('history_len', 0)} messages",
+        ),
+        section(f"Recent conversation (last {len(messages)})", convo),
+        section(
+            "Traceback",
+            f"```\n{ctx.get('traceback', '(none)').rstrip()}\n```",
+        ),
+        section(
+            "How to resume",
+            "1. Read the error above — if a brick is implicated, fix or "
+            "remove it.\n"
+            "2. `brikie --continue` reloads this conversation from memory.\n"
+            "3. The active goal (if any) is still tracked in the GoalBrick "
+            "store and surfaces on resume.",
+        ),
+    ]
+    return "\n".join(parts).rstrip() + "\n"
 
 
 def write_minimal_set(path: Path, provider_config: dict | None = None) -> Path:
