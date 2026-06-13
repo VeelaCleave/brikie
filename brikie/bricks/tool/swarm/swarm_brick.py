@@ -8,16 +8,25 @@ sub-agent finishes, its context is discarded — only the report returns. This
 is how an agent investigates ten files, or builds and reviews in parallel,
 without blowing its own window.
 
-Three roadmap pieces land together here:
+The full tier lands here:
 - **Swarm** — ``swarm_dispatch`` runs N sub-agents at once (bounded by a
   parallelism cap), then aggregates their reports.
-- **Routing** — each task carries a ``role``; the role selects a system
-  prompt that specializes the sub-agent (researcher / coder / reviewer /
-  generalist). Unknown roles fall back to generalist.
-- **Collaboration** — a shared ``context`` briefing is given to every
-  sub-agent, and the active goal (#1) is auto-attached, so the fan-out
-  stays aligned to one objective. Results come back together for the
-  coordinator to synthesize.
+- **Routing** — each task carries a ``role`` that selects a system prompt.
+  Built-in roles (researcher / coder / reviewer / generalist) are joined by
+  any loaded **soul** persona (mason, dreamer, …), so the user's installed
+  souls become delegatable roles. Unknown roles fall back to generalist.
+- **Collaboration** — three layers:
+  1. a shared ``context`` briefing + the active goal (#1) auto-attached to
+     every sub-agent, so the fan-out stays aligned;
+  2. a shared **blackboard** — sub-agents call ``swarm_share`` / ``swarm_inbox``
+     to pass findings to each other *while running* (real inter-agent
+     messaging, not just fan-out/fan-in);
+  3. an **auto-reviewer** pass — a successful ``coder`` sub-agent's work is
+     automatically handed to a reviewer sub-agent that returns PASS/FAIL with
+     specifics, before the result comes back.
+- **Goal integration** — the dispatch and each sub-agent's outcome are
+  logged into the active goal's append-only progress log, so delegated work
+  is visible in ``goal_status``.
 
 Containment & safety:
 - Each sub-agent gets the *same* Tool Bricks as the parent **except** the
@@ -28,9 +37,10 @@ Containment & safety:
   as they gate the coordinator.
 - Per-subagent step and context budgets keep each worker bounded.
 
-Kernel purity (AGENTS #1): the runner lives in ``brikie.kernel.subagent``
-and imports nothing from bricks. This brick wires it from the registry —
-the dependency points brick → kernel, never the reverse.
+Kernel purity (AGENTS #1): the runner and blackboard live in
+``brikie.kernel.subagent`` and import nothing from bricks. This brick wires
+them from the registry; souls arrive via the duck-typed ``set_souls`` the
+kernel calls. The dependency points brick → kernel, never the reverse.
 """
 
 from __future__ import annotations
@@ -44,7 +54,9 @@ from brikie.kernel.registry import ProviderBrick, ToolBrick as ToolBrickABC
 from brikie.kernel.subagent import (
     DEFAULT_CONTEXT_BUDGET,
     DEFAULT_MAX_STEPS,
+    SubAgentResult,
     SubAgentRunner,
+    SwarmBlackboard,
     run_swarm,
 )
 
@@ -53,7 +65,7 @@ logger = logging.getLogger(__name__)
 # Role → system-prompt specialization. The role routes a task to the kind
 # of sub-agent best suited to it. Each prompt is deliberately generic (no
 # provider/model assumptions) and reinforces the verify-then-report contract
-# the runner depends on.
+# the runner depends on. Loaded souls (set_souls) extend this set at runtime.
 _ROLE_PROMPTS: Dict[str, str] = {
     "researcher": (
         "You are a Researcher sub-agent. Investigate the task using your "
@@ -80,6 +92,40 @@ _ROLE_PROMPTS: Dict[str, str] = {
 }
 _DEFAULT_ROLE = "generalist"
 
+# Collaboration tools handed ONLY to sub-agents (never at the top level), so
+# they can talk to each other without being able to dispatch a sub-swarm.
+_MESSAGING_TOOLS: List[Dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "swarm_share",
+            "description": (
+                "Share a finding, fact, or interim result with the OTHER "
+                "sub-agents working alongside you in this swarm. Use it when "
+                "you discover something the others need."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "note": {"type": "string", "description": "The finding to share."},
+                },
+                "required": ["note"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "swarm_inbox",
+            "description": (
+                "Read notes the other sub-agents in this swarm have shared so "
+                "far. Check it before duplicating work they may have done."
+            ),
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+]
+
 
 class SwarmToolBrick(ToolBrick):
     BRICK_NUMBER = "BRK-470"
@@ -95,6 +141,8 @@ class SwarmToolBrick(ToolBrick):
         max_parallel: How many sub-agents may hit the provider at once.
         max_tasks: Hard ceiling on tasks per dispatch (fan-out cap).
         context_budget: Per-subagent token budget for its isolated history.
+        auto_review: When True (default), a successful coder sub-agent's
+            work is auto-reviewed before the result returns.
     """
 
     tools: List[Dict[str, Any]] = [
@@ -109,8 +157,11 @@ class SwarmToolBrick(ToolBrick):
                     "once, or build-and-review in parallel — WITHOUT bloating "
                     "your own context: each sub-agent works in its own "
                     "isolated context and only its report returns to you. "
-                    "Give each task a 'role' (researcher, coder, reviewer, or "
-                    "generalist) and a self-contained 'task' description."
+                    "Sub-agents can message each other (swarm_share/inbox) "
+                    "while running, and a coder's work is auto-reviewed. Give "
+                    "each task a 'role' (researcher, coder, reviewer, "
+                    "generalist, or a loaded soul — see swarm_roles) and a "
+                    "self-contained 'task' description."
                 ),
                 "parameters": {
                     "type": "object",
@@ -123,8 +174,7 @@ class SwarmToolBrick(ToolBrick):
                                 "properties": {
                                     "role": {
                                         "type": "string",
-                                        "enum": ["researcher", "coder", "reviewer", "generalist"],
-                                        "description": "The kind of sub-agent for this task.",
+                                        "description": "The kind of sub-agent for this task (researcher, coder, reviewer, generalist, or a loaded soul role; call swarm_roles to list).",
                                     },
                                     "task": {
                                         "type": "string",
@@ -137,6 +187,10 @@ class SwarmToolBrick(ToolBrick):
                         "context": {
                             "type": "string",
                             "description": "Optional shared briefing given to every sub-agent (the common background they all need).",
+                        },
+                        "review": {
+                            "type": "boolean",
+                            "description": "Auto-review coder sub-agents' work (default true). Set false to skip the reviewer pass.",
                         },
                     },
                     "required": ["tasks"],
@@ -161,7 +215,7 @@ class SwarmToolBrick(ToolBrick):
             "type": "function",
             "function": {
                 "name": "swarm_roles",
-                "description": "List the sub-agent roles available for swarm_dispatch and what each is for.",
+                "description": "List the sub-agent roles available for swarm_dispatch (built-in roles plus any loaded soul personas) and what each is for.",
                 "parameters": {"type": "object", "properties": {}, "required": []},
             },
         },
@@ -176,6 +230,7 @@ class SwarmToolBrick(ToolBrick):
         max_parallel: int = 4,
         max_tasks: int = 8,
         context_budget: int = DEFAULT_CONTEXT_BUDGET,
+        auto_review: bool = True,
     ) -> None:
         super().__init__()
         self._name = "swarm"
@@ -186,6 +241,9 @@ class SwarmToolBrick(ToolBrick):
         self._max_parallel = max_parallel
         self._max_tasks = max_tasks
         self._context_budget = context_budget
+        self._auto_review = auto_review
+        # role -> system prompt, contributed by loaded souls (set_souls).
+        self._soul_roles: Dict[str, str] = {}
 
     @property
     def name(self) -> str:
@@ -199,6 +257,23 @@ class SwarmToolBrick(ToolBrick):
         await self._store.shutdown()
         await super().shutdown()
 
+    def set_souls(self, souls: Dict[str, Any]) -> None:
+        """Turn loaded soul personas into delegatable sub-agent roles.
+
+        Called by the kernel during warm-up (duck-typed). Each soul's name
+        becomes a role whose system prompt is the soul's persona — so a user
+        who installs the Mason soul can dispatch ``role: "mason"`` sub-agents.
+        Built-in roles are not overridden by a soul of the same name.
+        """
+        for soul_name, soul in (souls or {}).items():
+            prompt = getattr(soul, "system_prompt", "") or ""
+            key = str(soul_name).strip().lower()
+            if key and prompt and key not in _ROLE_PROMPTS:
+                self._soul_roles[key] = prompt
+        if self._soul_roles:
+            logger.info("Swarm gained %d soul role(s): %s",
+                        len(self._soul_roles), ", ".join(self._soul_roles))
+
     async def execute(self, name: str, args: Dict[str, Any]) -> Any:
         if name == "swarm_dispatch":
             return await self._swarm_dispatch(args)
@@ -209,11 +284,23 @@ class SwarmToolBrick(ToolBrick):
         raise KeyError(f"Unknown tool: {name}")
 
     # ------------------------------------------------------------------
-    # Tool handlers
+    # Roles
     # ------------------------------------------------------------------
 
+    def _role_prompts(self) -> Dict[str, str]:
+        """Built-in roles merged with any soul-contributed roles."""
+        return {**_ROLE_PROMPTS, **self._soul_roles}
+
+    def _role_prompt(self, role: str) -> str:
+        return self._role_prompts().get(role, _ROLE_PROMPTS[_DEFAULT_ROLE])
+
     def _swarm_roles(self) -> Dict[str, Any]:
-        return {"roles": {r: p for r, p in _ROLE_PROMPTS.items()}}
+        roles = self._role_prompts()
+        return {
+            "roles": roles,
+            "soul_roles": sorted(self._soul_roles),
+            "builtin_roles": sorted(_ROLE_PROMPTS),
+        }
 
     async def _swarm_status(self, args: Dict[str, Any]) -> Dict[str, Any]:
         try:
@@ -222,6 +309,10 @@ class SwarmToolBrick(ToolBrick):
             limit = 5
         runs = await self._store.recent_runs(max(1, min(limit, 50)))
         return {"recent_runs": runs} if runs else {"message": "no swarm runs yet"}
+
+    # ------------------------------------------------------------------
+    # Dispatch
+    # ------------------------------------------------------------------
 
     async def _swarm_dispatch(self, args: Dict[str, Any]) -> Dict[str, Any]:
         raw_tasks = args.get("tasks")
@@ -240,42 +331,113 @@ class SwarmToolBrick(ToolBrick):
 
         shared = str(args.get("context", "")).strip()
         goal = await self._active_goal()
-        briefing = self._build_briefing(shared, goal)
+        do_review = bool(args.get("review", self._auto_review))
 
-        tool_schemas = self._subagent_tool_schemas()
-        execute_tool = self._make_tool_executor()
+        # A shared blackboard only when there is more than one collaborator.
+        board = SwarmBlackboard() if len(tasks) > 1 else None
+        briefing = self._build_briefing(shared, goal, collaborate=board is not None)
+
+        base_schemas = self._subagent_tool_schemas()
+        sub_schemas = base_schemas + (_MESSAGING_TOOLS if board else [])
 
         run_id = await self._store.start_run(goal or shared, len(tasks))
+        roles_summary = ", ".join(role for role, _ in tasks)
+        await self._log_goal("swarm.dispatch",
+                             f"delegated {len(tasks)} task(s) to: {roles_summary}")
 
         runners_and_tasks = []
-        for role, task_text in tasks:
+        for i, (role, task_text) in enumerate(tasks):
+            sender = f"{role}#{i + 1}"
+            execute_tool = self._make_tool_executor(board=board, sender=sender)
             runner = SubAgentRunner(
                 provider=provider,
-                tool_schemas=tool_schemas,
+                tool_schemas=sub_schemas,
                 execute_tool=execute_tool,
                 hooks=self._hooks,
                 max_steps=self._max_steps,
                 context_budget=self._context_budget,
                 label=role,
             )
-            system_prompt = _ROLE_PROMPTS[role]
             full_task = f"{briefing}{task_text}" if briefing else task_text
-            runners_and_tasks.append((runner, system_prompt, full_task))
+            runners_and_tasks.append((runner, self._role_prompt(role), full_task))
 
         logger.info("Swarm %s dispatching %d sub-agent(s).", run_id, len(tasks))
         results = await run_swarm(runners_and_tasks, max_parallel=self._max_parallel)
 
+        if do_review:
+            await self._auto_review_coders(results, provider, base_schemas)
+
+        # Persist + surface each outcome in the active goal's progress log.
         for i, result in enumerate(results):
             await self._store.record_task(run_id, i, result)
+            verdict = "ok" if result.ok else "failed"
+            if result.reviewed:
+                verdict += f"; review {'PASS' if result.review_ok else 'FAIL'}"
+            await self._log_goal(f"swarm.{result.role}",
+                                 f"{verdict} — {result.report[:160]}")
+
         ok_count = sum(1 for r in results if r.ok)
         summary = f"{ok_count}/{len(results)} sub-agent(s) completed successfully"
         await self._store.finish_run(run_id, ok_count, summary)
 
-        return {
+        out: Dict[str, Any] = {
             "run_id": run_id,
             "summary": summary,
             "results": [r.to_dict() for r in results],
         }
+        if board:
+            shared_notes = board.snapshot()
+            if shared_notes:
+                out["shared_notes"] = shared_notes
+        return out
+
+    async def _auto_review_coders(
+        self,
+        results: List[SubAgentResult],
+        provider: Any,
+        base_schemas: List[Dict[str, Any]],
+    ) -> None:
+        """Auto-spawn a reviewer for each successful coder result.
+
+        The reviewer inspects the coder's work (it has the same read tools)
+        and returns a PASS/FAIL verdict with specifics, attached to the
+        coder's result. Reviewers don't get the blackboard — they judge a
+        finished artifact, not collaborate.
+        """
+        targets = [
+            (i, r) for i, r in enumerate(results) if r.role == "coder" and r.ok
+        ]
+        if not targets:
+            return
+
+        review_runners = []
+        for _i, r in targets:
+            runner = SubAgentRunner(
+                provider=provider,
+                tool_schemas=base_schemas,
+                execute_tool=self._make_tool_executor(),
+                hooks=self._hooks,
+                max_steps=self._max_steps,
+                context_budget=self._context_budget,
+                label="reviewer",
+            )
+            review_task = (
+                "Review another sub-agent's completed work for correctness "
+                "and completeness. Inspect it (read the relevant files or run "
+                "checks) — do not take the report at face value.\n\n"
+                f"The task it was given:\n{r.task}\n\n"
+                f"Its report:\n{r.report}\n\n"
+                "Finish with a verdict line: 'REVIEW: PASS' if the work is "
+                "correct and complete, or 'REVIEW: FAIL — <specific problems>' "
+                "if not."
+            )
+            review_runners.append((runner, _ROLE_PROMPTS["reviewer"], review_task))
+
+        reviews = await run_swarm(review_runners, max_parallel=self._max_parallel)
+        for (idx, _r), rev in zip(targets, reviews):
+            results[idx].reviewed = True
+            results[idx].review = rev.report.strip()
+            results[idx].review_ok = "REVIEW: PASS" in rev.report.upper()
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -283,6 +445,7 @@ class SwarmToolBrick(ToolBrick):
 
     def _normalize_tasks(self, raw_tasks: List[Any]) -> List[tuple]:
         """Validate/clean the task list into [(role, task), ...]."""
+        valid_roles = self._role_prompts()
         out: List[tuple] = []
         for item in raw_tasks:
             if isinstance(item, dict):
@@ -294,19 +457,25 @@ class SwarmToolBrick(ToolBrick):
                 continue
             if not task_text:
                 continue
-            if role not in _ROLE_PROMPTS:
+            if role not in valid_roles:
                 role = _DEFAULT_ROLE
             out.append((role, task_text))
         return out
 
     @staticmethod
-    def _build_briefing(shared: str, goal: str) -> str:
+    def _build_briefing(shared: str, goal: str, collaborate: bool = False) -> str:
         """Assemble the common preamble prepended to every sub-agent's task."""
         parts: List[str] = []
         if goal:
             parts.append(f"Overall goal: {goal}")
         if shared:
             parts.append(f"Shared context: {shared}")
+        if collaborate:
+            parts.append(
+                "You are one of several sub-agents on this. Call swarm_inbox "
+                "to read what others have found, and swarm_share to pass on "
+                "anything they need."
+            )
         if not parts:
             return ""
         return "\n".join(parts) + "\n\nYour task:\n"
@@ -331,6 +500,24 @@ class SwarmToolBrick(ToolBrick):
                 return ""
         return ""
 
+    async def _log_goal(self, kind: str, detail: str) -> None:
+        """Record a progress event in the active goal, if a goal brick is seated.
+
+        Duck-typed: probes for ``log_progress`` (the GoalBrick exposes it).
+        Best-effort — a missing or inactive goal is a silent no-op.
+        """
+        if self._registry is None:
+            return
+        for brick in self._registry._bricks.values():
+            logger_fn = getattr(brick, "log_progress", None)
+            if logger_fn is None:
+                continue
+            try:
+                await logger_fn(kind, detail)
+            except Exception:
+                logger.debug("goal progress log failed", exc_info=True)
+            return
+
     def _subagent_tool_schemas(self) -> List[Dict[str, Any]]:
         """Tool schemas for sub-agents: every Tool Brick's tools except ours.
 
@@ -347,16 +534,30 @@ class SwarmToolBrick(ToolBrick):
                 schemas.append(s)
         return schemas
 
-    def _make_tool_executor(self):
+    def _make_tool_executor(self, board: Any = None, sender: str = ""):
         """Build the (name, args) -> str executor backed by the registry.
 
-        Routes a tool call to the first non-swarm Tool Brick that advertises
-        it. Errors are returned as strings (never raised) so one bad call
-        can't crash a sub-agent.
+        When a ``board`` is supplied, the collaboration tools
+        (swarm_share / swarm_inbox) are handled in-process against it;
+        everything else routes to the first non-swarm Tool Brick that
+        advertises the call. Errors are returned as strings (never raised)
+        so one bad call can't crash a sub-agent.
         """
         registry = self._registry
 
         async def execute_tool(name: str, args: Dict[str, Any]) -> str:
+            if board is not None and name == "swarm_share":
+                note = str(args.get("note", "")).strip()
+                if not note:
+                    return "swarm_share needs a non-empty 'note'."
+                await board.post(sender, note)
+                return "Shared with the swarm."
+            if board is not None and name == "swarm_inbox":
+                msgs = await board.read(exclude_sender=sender)
+                if not msgs:
+                    return "No notes from other sub-agents yet."
+                return "\n".join(f"[{m['from']}] {m['note']}" for m in msgs)
+
             if registry is None:
                 return f"No registry available to run tool '{name}'"
             for tool in registry.get_all(ToolBrickABC):

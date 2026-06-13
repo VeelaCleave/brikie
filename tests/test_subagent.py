@@ -15,6 +15,7 @@ from brikie.config.types import HookType
 from brikie.kernel.subagent import (
     SubAgentRunner,
     SubAgentResult,
+    SwarmBlackboard,
     run_swarm,
 )
 
@@ -218,3 +219,33 @@ class TestSwarmConcurrency:
         results = await run_swarm([good, bad])
         assert results[0].ok is True
         assert results[1].ok is False        # one failing agent doesn't sink the swarm
+
+
+class TestBlackboard:
+    async def test_post_and_read(self):
+        bb = SwarmBlackboard()
+        await bb.post("researcher#1", "found the bug in foo.py")
+        await bb.post("coder#2", "patched it")
+        # A reader sees others' notes but not its own.
+        seen = await bb.read(exclude_sender="coder#2")
+        assert [m["note"] for m in seen] == ["found the bug in foo.py"]
+        assert len(bb.snapshot()) == 2
+
+    async def test_subagent_can_message_through_executor(self):
+        # A sub-agent that calls swarm_share routes to the board via its
+        # execute_tool — proving the runner carries collaboration in path.
+        bb = SwarmBlackboard()
+
+        async def exec_tool(name, args):
+            if name == "swarm_share":
+                await bb.post("researcher#1", args["note"])
+                return "shared"
+            return "?"
+
+        prov = ScriptedProvider([
+            ("sharing", [_call("swarm_share", {"note": "secret: 42"})], {}),
+            ("done. TASK COMPLETE", [], {}),
+        ])
+        res = await _runner(prov, exec_tool, label="researcher#1").run("sys", "x")
+        assert res.ok is True
+        assert [m["note"] for m in bb.snapshot()] == ["secret: 42"]

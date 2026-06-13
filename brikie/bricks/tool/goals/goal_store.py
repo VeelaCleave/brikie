@@ -165,6 +165,15 @@ class GoalStore:
             for r in (rows or [])
         ]
 
+    async def log_event(self, goal_id: str, kind: str, detail: str) -> None:
+        """Append an external progress event to a goal's log and touch it.
+
+        Used by collaborators (e.g. the Swarm brick) to record delegated
+        work against the active goal without owning a subtask.
+        """
+        await self._log(goal_id, kind, detail)
+        await self._touch_goal(goal_id)
+
     async def recent_events(self, goal_id: str, limit: int = 20) -> list[dict]:
         rows = await self._pool._execute(
             "SELECT kind, detail, created_at FROM goal_events "

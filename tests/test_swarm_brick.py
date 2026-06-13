@@ -42,16 +42,45 @@ class FakeToolBrick:
 
 
 class GoalCarrier:
-    """A brick exposing the duck-typed active_goal_context() the kernel and
-    swarm anchor to (without importing GoalBrick)."""
+    """A brick exposing the duck-typed active_goal_context() + log_progress
+    the kernel and swarm anchor to (without importing GoalBrick)."""
 
     name = "goals"
 
     def __init__(self, goal: str) -> None:
         self._goal = goal
+        self.progress: List[tuple] = []
 
     async def active_goal_context(self) -> str:
         return self._goal
+
+    async def log_progress(self, kind: str, detail: str) -> bool:
+        self.progress.append((kind, detail))
+        return True
+
+
+class FakeSoul:
+    def __init__(self, name: str, prompt: str) -> None:
+        self.name = name
+        self.system_prompt = prompt
+        self.behavioral_constraints: Dict[str, Any] = {}
+
+
+class RoleAwareProvider:
+    """Replies based on the sub-agent's system prompt — lets us drive the
+    coder→reviewer auto-review flow deterministically."""
+
+    name = "role_aware"
+
+    def __init__(self) -> None:
+        self.system_prompts: List[str] = []
+
+    async def get_completion(self, messages, tools):
+        system = messages[0]["content"]
+        self.system_prompts.append(system)
+        if "Reviewer" in system:
+            return ("Checked it. REVIEW: PASS — correct and complete. TASK COMPLETE", [], {})
+        return ("Implemented the change. TASK COMPLETE", [], {})
 
 
 class FakeRegistry:
@@ -159,6 +188,7 @@ class TestDispatch:
                 {"role": "researcher", "task": "investigate A"},
                 {"role": "coder", "task": "build B"},
             ],
+            "review": False,    # auto-review covered separately
         })
         assert "run_id" in out
         assert len(out["results"]) == 2
@@ -194,4 +224,96 @@ class TestDispatch:
         assert captured
         assert "Ship the Swarm tier" in captured[0]
         assert "do a thing" in captured[0]
+        await brick.shutdown()
+
+
+class TestSoulRoles:
+    async def test_souls_become_roles(self, tmp_path):
+        brick, *_ = await _make_brick(tmp_path)
+        brick.set_souls({"mason": FakeSoul("mason", "You are the Mason. Build precisely.")})
+        roles = brick._swarm_roles()
+        assert "mason" in roles["soul_roles"]
+        assert "mason" in roles["roles"]
+        assert brick._normalize_tasks([{"role": "mason", "task": "x"}]) == [("mason", "x")]
+        assert "Mason" in brick._role_prompt("mason")
+        await brick.shutdown()
+
+    async def test_builtin_role_not_overridden_by_soul(self, tmp_path):
+        brick, *_ = await _make_brick(tmp_path)
+        brick.set_souls({"coder": FakeSoul("coder", "EVIL OVERRIDE")})
+        assert "EVIL OVERRIDE" not in brick._role_prompt("coder")
+        await brick.shutdown()
+
+
+class TestGoalProgress:
+    async def test_dispatch_logs_to_active_goal(self, tmp_path):
+        goal = GoalCarrier("Ship the swarm")
+        brick, *_ = await _make_brick(tmp_path, extra=[goal])
+        await brick.execute("swarm_dispatch", {
+            "tasks": [{"role": "researcher", "task": "look into A"}],
+            "review": False,
+        })
+        kinds = [k for k, _ in goal.progress]
+        assert "swarm.dispatch" in kinds          # the fan-out itself
+        assert any(k == "swarm.researcher" for k in kinds)   # the outcome
+        await brick.shutdown()
+
+
+class TestAutoReview:
+    async def test_coder_result_is_reviewed(self, tmp_path):
+        prov = RoleAwareProvider()
+        brick, *_ = await _make_brick(tmp_path, provider=prov)
+        out = await brick.execute("swarm_dispatch", {
+            "tasks": [{"role": "coder", "task": "add a helper"}],
+        })
+        coder = out["results"][0]
+        assert coder["ok"] is True
+        assert coder["reviewed"] is True
+        assert coder["review_ok"] is True
+        assert "PASS" in coder["review"].upper()
+        # A reviewer sub-agent actually ran (its system prompt was used).
+        assert any("Reviewer" in s for s in prov.system_prompts)
+        await brick.shutdown()
+
+    async def test_review_can_be_disabled(self, tmp_path):
+        prov = RoleAwareProvider()
+        brick, *_ = await _make_brick(tmp_path, provider=prov)
+        out = await brick.execute("swarm_dispatch", {
+            "tasks": [{"role": "coder", "task": "add a helper"}],
+            "review": False,
+        })
+        assert out["results"][0].get("reviewed", False) is False
+        assert all("Reviewer" not in s for s in prov.system_prompts)
+        await brick.shutdown()
+
+    async def test_non_coder_not_reviewed(self, tmp_path):
+        prov = RoleAwareProvider()
+        brick, *_ = await _make_brick(tmp_path, provider=prov)
+        out = await brick.execute("swarm_dispatch", {
+            "tasks": [{"role": "researcher", "task": "investigate"}],
+        })
+        assert out["results"][0].get("reviewed", False) is False
+        await brick.shutdown()
+
+
+class TestCollaboration:
+    async def test_messaging_tools_offered_when_multiple_agents(self, tmp_path):
+        brick, *_ = await _make_brick(tmp_path)
+        # Executor with a board routes swarm_share/inbox to the blackboard.
+        from brikie.kernel.subagent import SwarmBlackboard
+        board = SwarmBlackboard()
+        ex1 = brick._make_tool_executor(board=board, sender="researcher#1")
+        ex2 = brick._make_tool_executor(board=board, sender="coder#2")
+        assert await ex1("swarm_share", {"note": "found X"}) == "Shared with the swarm."
+        inbox = await ex2("swarm_inbox", {})
+        assert "found X" in inbox and "researcher#1" in inbox
+        # The poster doesn't see its own note echoed back.
+        assert "No notes" in await ex1("swarm_inbox", {})
+        await brick.shutdown()
+
+    async def test_no_board_means_messaging_unavailable(self, tmp_path):
+        brick, *_ = await _make_brick(tmp_path)
+        ex = brick._make_tool_executor()       # no board
+        out = await ex("swarm_share", {"note": "x"})
+        assert "No tool brick" in out          # not routable without a board
         await brick.shutdown()

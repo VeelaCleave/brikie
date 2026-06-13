@@ -229,6 +229,7 @@ class EventLoop:
 
         self._register_memory_hooks()
         await self._register_brick_hooks()
+        self._distribute_souls()
 
         if self._resume:
             await self._restore_history()
@@ -452,6 +453,28 @@ class EventLoop:
                 await brick.intercept_message(session_id, "user", user_text)
             except Exception:
                 logger.exception("Failed to intercept user message in brick: %s", brick.name)
+
+    def _distribute_souls(self) -> None:
+        """Hand the loaded souls to any brick that wants them (duck-typed).
+
+        Souls are configuration, not registered bricks (AGENTS #4), so a
+        brick can't reach them through the registry. Any brick exposing
+        ``set_souls(souls)`` — e.g. the Swarm brick, which turns soul
+        personas into delegatable sub-agent roles — receives them here. The
+        kernel imports nothing; it only probes for the capability.
+        """
+        if not self._souls:
+            return
+        for brick in self._registry._bricks.values():
+            setter = getattr(brick, "set_souls", None)
+            if setter is None:
+                continue
+            try:
+                setter(self._souls)
+                logger.info("Provided %d soul(s) to brick: %s",
+                            len(self._souls), brick.name)
+            except Exception:
+                logger.exception("Could not provide souls to %s", brick.name)
 
     async def _register_brick_hooks(self) -> None:
         """Discover and register middleware hooks from any capable brick.

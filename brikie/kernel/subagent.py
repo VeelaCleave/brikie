@@ -79,9 +79,13 @@ class SubAgentResult:
     tools_used: List[str] = field(default_factory=list)
     blocked: List[str] = field(default_factory=list)
     error: str = ""
+    # Set when an auto-reviewer sub-agent inspected this result (coder pass).
+    reviewed: bool = False
+    review_ok: bool = False
+    review: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        out = {
             "role": self.role,
             "task": self.task,
             "ok": self.ok,
@@ -92,6 +96,38 @@ class SubAgentResult:
             "blocked": self.blocked,
             "error": self.error,
         }
+        if self.reviewed:
+            out["reviewed"] = True
+            out["review_ok"] = self.review_ok
+            out["review"] = self.review
+        return out
+
+
+class SwarmBlackboard:
+    """A shared, append-only message board for one swarm dispatch.
+
+    This is what turns fan-out/fan-in into genuine collaboration: while the
+    sub-agents of a dispatch run concurrently, each can ``post`` a finding
+    and ``read`` what the others have shared. A long-running researcher can
+    surface a fact mid-run that a coder picks up before it finishes. Scoped
+    to a single dispatch and discarded with it (no cross-run leakage).
+    """
+
+    def __init__(self) -> None:
+        self._messages: List[Dict[str, str]] = []
+        self._lock = asyncio.Lock()
+
+    async def post(self, sender: str, note: str) -> None:
+        async with self._lock:
+            self._messages.append({"from": sender, "note": note})
+
+    async def read(self, exclude_sender: str = "") -> List[Dict[str, str]]:
+        async with self._lock:
+            return [m for m in self._messages if m["from"] != exclude_sender]
+
+    def snapshot(self) -> List[Dict[str, str]]:
+        """All messages posted during the run (for the audit trail)."""
+        return list(self._messages)
 
 
 class SubAgentRunner:

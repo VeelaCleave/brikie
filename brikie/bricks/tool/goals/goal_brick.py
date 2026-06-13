@@ -159,6 +159,20 @@ class GoalBrick(ToolBrick):
         parts = [p for p in (goal.get("title"), goal.get("detail")) if p]
         return ": ".join(parts)
 
+    async def log_progress(self, kind: str, detail: str) -> bool:
+        """Append a progress event to the active goal's log (duck-typed).
+
+        A capability the kernel/other bricks probe for (without importing
+        this class) so delegated work — e.g. a Swarm dispatch and each
+        sub-agent's outcome — shows up in ``goal_status`` recent events.
+        Returns False (a no-op) when there is no active goal.
+        """
+        goal = await self._store.latest_active_goal()
+        if not goal:
+            return False
+        await self._store.log_event(goal["id"], kind, detail[:500])
+        return True
+
     async def execute(self, name: str, args: Dict[str, Any]) -> Any:
         """Dispatch a goal tool.
 
