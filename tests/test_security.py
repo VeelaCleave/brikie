@@ -122,6 +122,48 @@ class TestCommandFirewallBrick:
         assert firewall.blocked_log[0].tool_name == "bash"
         assert "destructive" in firewall.blocked_log[0].reason
 
+    # ── Command patterns only gate EXECUTION tools, not file content ──
+
+    async def test_real_bash_tool_name_is_gated(self):
+        # The real shell tool is "bash_execute", not just "bash".
+        firewall = CommandFirewallBrick()
+        decision = await firewall.evaluate("bash_execute", {"command": "rm -rf /"})
+        assert decision == SecurityDecision.BLOCK
+
+    async def test_write_file_with_dangerous_string_in_content_allowed(self):
+        # Writing a file whose CONTENT mentions "rm -rf /" is not executing it.
+        # This is the false positive that deadlocked the agent.
+        firewall = CommandFirewallBrick()
+        decision = await firewall.evaluate(
+            "write_file",
+            {"path": "tests/test_x.py", "content": "assert 'rm -rf /' in cmd"},
+        )
+        assert decision == SecurityDecision.ALLOW
+
+    async def test_edit_file_with_dangerous_string_in_content_allowed(self):
+        firewall = CommandFirewallBrick()
+        decision = await firewall.evaluate(
+            "edit_file",
+            {"path": "x.sh", "old": "foo", "new": "# do not run rm -rf /"},
+        )
+        assert decision == SecurityDecision.ALLOW
+
+    async def test_grep_for_dangerous_string_allowed(self):
+        # Searching for the string is not running it.
+        firewall = CommandFirewallBrick()
+        decision = await firewall.evaluate(
+            "grep_contents", {"pattern": "rm -rf /", "path": "."},
+        )
+        assert decision == SecurityDecision.ALLOW
+
+    async def test_custom_command_tool_is_gated(self):
+        firewall = CommandFirewallBrick(command_tools=["my_shell"])
+        assert await firewall.evaluate(
+            "my_shell", {"cmd": "rm -rf /"}) == SecurityDecision.BLOCK
+        # write_file is no longer in the command-tools set → not scanned
+        assert await firewall.evaluate(
+            "write_file", {"content": "rm -rf /"}) == SecurityDecision.ALLOW
+
     async def test_blocked_tool_gets_error_result(self):
         firewall = CommandFirewallBrick()
         tc = _FakeTC(name="bash", args={"command": "rm -rf /"})
@@ -176,3 +218,5 @@ class TestSandboxSecurityBrick:
         assert config.memory_limit == "512m"
         assert config.network_enabled is False
         assert config.read_only_root is True
+
+

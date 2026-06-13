@@ -20,7 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from collections import deque
+from collections import Counter, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -39,6 +39,7 @@ _DEFAULT_BUFFER_SIZE = 128
 _LOOP_REPEAT_THRESHOLD = 4     # same tool+args N times = loop
 _OSCILLATION_THRESHOLD = 6     # A→B→A→B length ≥ 6 = oscillation
 _ERROR_REPEAT_THRESHOLD = 3    # same error string N times = error loop
+_ERROR_WINDOW = 20             # window scanned for recurring (interleaved) errors
 
 _LOOP_TYPE_REPEAT = "repeat"
 _LOOP_TYPE_OSCILLATE = "oscillate"
@@ -384,33 +385,37 @@ class LoopDetectorBrick(ToolBrick):
 
     @staticmethod
     def _check_error_loop(buf: List[ToolCallRecord]) -> Optional[LoopInfo]:
-        """Check for the same error string repeated N+ times."""
+        """Check for the same error string recurring N+ times in a window.
+
+        Counts occurrences across a wider window rather than requiring the
+        errors to be consecutive — an agent that retries a blocked command,
+        reads a few files to diagnose, then retries again interleaves
+        successes between the identical errors. The old consecutive-only
+        check missed exactly that pattern (e.g. a firewall block hit
+        repeatedly between diagnostic reads).
+        """
         if len(buf) < _ERROR_REPEAT_THRESHOLD:
             return None
 
-        # Only look at non-success calls
-        recent = [r for r in buf[-_ERROR_REPEAT_THRESHOLD * 2:] if not r.success]
-        if len(recent) < _ERROR_REPEAT_THRESHOLD:
+        window = buf[-_ERROR_WINDOW:]
+        errors = [r for r in window if not r.success and r.result_preview]
+        if len(errors) < _ERROR_REPEAT_THRESHOLD:
             return None
 
-        recent_errors = recent[-_ERROR_REPEAT_THRESHOLD:]
-        first_err = recent_errors[0].result_preview
-
-        # Same error string (first 80 chars)
-        if not all(
-            r.result_preview[:80] == first_err[:80]
-            for r in recent_errors
-        ):
+        # Tally identical error previews (first 80 chars) across the window.
+        counts = Counter(r.result_preview[:80] for r in errors)
+        err_text, count = counts.most_common(1)[0]
+        if count < _ERROR_REPEAT_THRESHOLD:
             return None
 
+        tool_names = list({
+            r.name for r in errors if r.result_preview[:80] == err_text
+        })
         return LoopInfo(
             loop_type=_LOOP_TYPE_ERROR,
-            tool_names=list(set(r.name for r in recent_errors)),
-            count=len(recent_errors),
-            detail=(
-                f"Same error repeated {len(recent_errors)} times: "
-                f"'{first_err[:80]}'"
-            ),
+            tool_names=tool_names,
+            count=count,
+            detail=f"Same error repeated {count} times: '{err_text}'",
         )
 
     # ── Loop handling ───────────────────────────────────────────────

@@ -48,6 +48,14 @@ _DEFAULT_BLOCK_PATTERNS: List[Tuple[str, str]] = [
     (r"dpkg\s+--(?:remove|purge)", "package removal"),
 ]
 
+# Tools whose arguments are actually executed as shell commands. The
+# destructive-command blocklist above only makes sense for these. Matching
+# "rm -rf /" inside the CONTENT a file-writing tool is saving (or a string
+# being grepped, or a test fixture) is a false positive — writing or reading
+# text that mentions a dangerous command is not running it. Only execution
+# tools get their argument strings scanned against the command blocklist.
+_DEFAULT_COMMAND_TOOLS = {"bash_execute", "bash", "shell", "sh"}
+
 
 class CommandFirewallBrick(SecurityBrick):
     BRICK_NUMBER = "BRK-800"
@@ -66,6 +74,7 @@ class CommandFirewallBrick(SecurityBrick):
         self,
         block_patterns: Optional[List[Tuple[str, str]]] = None,
         allowlisted_tools: Optional[List[str]] = None,
+        command_tools: Optional[List[str]] = None,
     ) -> None:
         super().__init__()
         self._name = "command_firewall"
@@ -75,6 +84,13 @@ class CommandFirewallBrick(SecurityBrick):
             for p, desc in self._block_patterns
         ]
         self._allowlisted = set(allowlisted_tools or [])
+        # Tools whose args are scanned against the command blocklist. Defaults
+        # to the shell-execution tools; a file write whose content mentions a
+        # dangerous command is not executing it, so it is not scanned.
+        self._command_tools = (
+            set(command_tools) if command_tools is not None
+            else set(_DEFAULT_COMMAND_TOOLS)
+        )
 
     @property
     def block_patterns(self) -> List[Tuple[str, str]]:
@@ -102,8 +118,12 @@ class CommandFirewallBrick(SecurityBrick):
         """Evaluate a tool call against the firewall rules.
 
         1. If the tool name is allowlisted → ALLOW immediately.
-        2. Serialize args to string and check all block patterns.
-        3. No match → ALLOW. Match → BLOCK.
+        2. If the tool name matches a block pattern → BLOCK.
+        3. For *execution* tools only, scan the argument strings against the
+           command blocklist. Non-execution tools (e.g. file writes whose
+           content merely mentions a dangerous command) are not scanned —
+           writing or reading text is not running it.
+        4. No match → ALLOW.
         """
         # Allowlist takes precedence
         if tool_name in self._allowlisted:
@@ -116,15 +136,23 @@ class CommandFirewallBrick(SecurityBrick):
             self._last_rule = match
             return SecurityDecision.BLOCK
 
-        # Check block patterns against argument strings
-        args_text = _serialize_args(args)
-        match, desc = self._match_pattern(args_text)
-        if match:
-            self._last_reason = desc or "Matched block pattern in arguments"
-            self._last_rule = match
-            return SecurityDecision.BLOCK
+        # The command blocklist describes shell commands — only scan the
+        # arguments of tools that actually execute them. This is what stops
+        # `write_file`/`edit_file` from being blocked because the text being
+        # saved contains a string like "rm -rf /".
+        if tool_name in self._command_tools:
+            args_text = _serialize_args(args)
+            match, desc = self._match_pattern(args_text)
+            if match:
+                self._last_reason = desc or "Matched block pattern in arguments"
+                self._last_rule = match
+                return SecurityDecision.BLOCK
 
         return SecurityDecision.ALLOW
+
+    def add_command_tool(self, tool_name: str) -> None:
+        """Register a tool whose args are scanned as shell commands."""
+        self._command_tools.add(tool_name)
 
     def _match_pattern(self, text: str) -> Tuple[Optional[str], Optional[str]]:
         """Check text against all compiled block patterns.

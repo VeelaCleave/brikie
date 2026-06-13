@@ -231,6 +231,24 @@ class TestDetectErrorLoop:
         loop = detector._detect_loop()
         assert loop is None  # Need 3
 
+    def test_detects_interleaved_error_loop(self, detector):
+        # The real deadlock pattern: a blocked command retried with
+        # diagnostic reads between attempts — same error, never consecutive.
+        # The old consecutive-only check missed this; the windowed tally
+        # must catch it.
+        block = "Error: Security policy blocked 'bash_execute' — rm -rf /"
+        detector._record(make_tc("bash_execute", {"command": "a"}, result=block))
+        detector._record(make_tc("read_file", {"path": "/x"}, result="ok"))
+        detector._record(make_tc("read_file", {"path": "/y"}, result="ok"))
+        detector._record(make_tc("bash_execute", {"command": "b"}, result=block))
+        detector._record(make_tc("read_file", {"path": "/z"}, result="ok"))
+        detector._record(make_tc("bash_execute", {"command": "c"}, result=block))
+
+        loop = detector._detect_loop()
+        assert loop is not None
+        assert loop.loop_type == _LOOP_TYPE_ERROR
+        assert loop.count == 3
+
 
 # ──────────────────────────────────────────────────────────────────────
 # Detection Priority
