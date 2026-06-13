@@ -99,6 +99,34 @@ class Workspace:
                              exc_info=True)
 
 
+async def prune_swarm_worktrees(repo_root: Path) -> int:
+    """Remove leftover swarm worktrees from a crashed dispatch; return count.
+
+    Safe to call at startup: no dispatch is in flight then, so any worktree
+    whose path was created by this module (``brikie-swarm-*``) is stale.
+    """
+    repo_root = Path(repo_root).resolve()
+    if not await is_git_repo(repo_root):
+        return 0
+    code, out, _ = await _git(["worktree", "list", "--porcelain"], repo_root)
+    if code != 0:
+        return 0
+    removed = 0
+    for line in out.splitlines():
+        if not line.startswith("worktree "):
+            continue
+        path = line[len("worktree "):].strip()
+        if "brikie-swarm-" in Path(path).name:
+            rc, _o, _e = await _git(
+                ["worktree", "remove", "--force", path], repo_root)
+            if rc == 0:
+                removed += 1
+    if removed:
+        await _git(["worktree", "prune"], repo_root)
+        logger.info("Pruned %d stale swarm worktree(s).", removed)
+    return removed
+
+
 async def provision(repo_root: Path, label: str) -> Workspace:
     """Create an isolated worktree at HEAD, or a shared workspace if we can't."""
     repo_root = Path(repo_root).resolve()

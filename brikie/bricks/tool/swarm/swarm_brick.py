@@ -295,6 +295,15 @@ class SwarmToolBrick(ToolBrick):
 
     async def init(self) -> None:
         await self._store.initialize()
+        # Durability: a process restart means any prior dispatch is dead.
+        # Flag orphaned runs honestly and clean up worktrees they leaked.
+        try:
+            n = await self._store.reconcile_orphans()
+            if n:
+                logger.info("Marked %d orphaned swarm run(s) from a prior crash.", n)
+            await ws_mod.prune_swarm_worktrees(Path(self._workspace_root or Path.cwd()))
+        except Exception:
+            logger.debug("swarm durability reconcile failed", exc_info=True)
         await super().init()
 
     async def shutdown(self) -> None:
@@ -449,6 +458,9 @@ class SwarmToolBrick(ToolBrick):
                 timeout=self._subagent_timeout)
             for idx, res in zip(wave, wave_results):
                 results[idx] = res
+                # Durability: persist each result the moment its wave lands,
+                # so a crash in a later wave doesn't lose completed work.
+                await self._store.record_task(run_id, idx, res)
 
         # Capture each isolated coder's patch BEFORE review (so the reviewer
         # judges the actual diff) and before it's applied.

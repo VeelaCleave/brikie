@@ -16,11 +16,17 @@ from typing import Any, List
 from brikie.bricks.memory.sqlite_pool import VersionedConnectionPool
 
 
+async def _m_add_orphaned(conn) -> None:
+    """v1→v2: flag runs left mid-flight by a crash (vs. cleanly finished)."""
+    await conn.execute(
+        "ALTER TABLE swarm_runs ADD COLUMN orphaned INTEGER NOT NULL DEFAULT 0")
+
+
 class SwarmConnectionPool(VersionedConnectionPool):
     """SQLite connection pool for the swarm audit store."""
 
-    SCHEMA_VERSION = 1
-    MIGRATIONS: dict = {}
+    SCHEMA_VERSION = 2
+    MIGRATIONS: dict = {1: _m_add_orphaned}
     DB_FILENAME = "swarm.db"
 
     def _get_schema_path(self) -> Path:
@@ -51,19 +57,48 @@ class SwarmStore:
     async def record_task(
         self, run_id: str, position: int, result: Any,
     ) -> None:
-        """Persist one sub-agent's outcome (a SubAgentResult)."""
+        """Persist one sub-agent's outcome (a SubAgentResult), idempotently.
+
+        Keyed on (run_id, position) via a deterministic id and INSERT OR
+        REPLACE, so it can be called incrementally as each wave completes
+        (durability) and again at the end with the enriched final state
+        without duplicating rows.
+        """
         await self._pool._execute(
-            "INSERT INTO swarm_tasks "
+            "INSERT OR REPLACE INTO swarm_tasks "
             "(id, run_id, position, role, task, ok, report, steps, "
             " tool_calls, tools_used) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                str(uuid.uuid4()), run_id, position,
+                f"{run_id}-{position}", run_id, position,
                 result.role, result.task[:1000], 1 if result.ok else 0,
                 result.report[:4000], result.steps, result.tool_calls,
                 ", ".join(result.tools_used)[:500],
             ),
         )
+
+    async def reconcile_orphans(self) -> int:
+        """Mark runs still 'running' as orphaned and return the count.
+
+        Called at startup: a swarm can't survive a process restart, so any
+        run left 'running' was abandoned by a crashed/killed process. We flag
+        it (status→done, orphaned=1) so it shows up honestly in swarm_status
+        instead of lingering as 'running' forever.
+        """
+        rows = await self._pool._execute(
+            "SELECT id FROM swarm_runs WHERE status = 'running'",
+            (), fetch="all",
+        )
+        count = len(rows or [])
+        if count:
+            await self._pool._execute(
+                "UPDATE swarm_runs SET status = 'done', orphaned = 1, "
+                "summary = CASE WHEN summary = '' THEN "
+                "'orphaned — interrupted before completion' ELSE summary END, "
+                "finished_at = strftime('%Y-%m-%d %H:%M:%f', 'now', 'utc') "
+                "WHERE status = 'running'",
+            )
+        return count
 
     async def finish_run(self, run_id: str, ok_count: int, summary: str) -> None:
         """Mark a run done with its aggregate outcome."""
@@ -76,8 +111,8 @@ class SwarmStore:
 
     async def recent_runs(self, limit: int = 10) -> List[dict]:
         rows = await self._pool._execute(
-            "SELECT id, status, goal, task_count, ok_count, summary, created_at "
-            "FROM swarm_runs ORDER BY created_at DESC LIMIT ?",
+            "SELECT id, status, goal, task_count, ok_count, summary, created_at, "
+            "orphaned FROM swarm_runs ORDER BY created_at DESC LIMIT ?",
             (limit,),
             fetch="all",
         )
@@ -85,7 +120,7 @@ class SwarmStore:
             {
                 "run_id": r[0], "status": r[1], "goal": r[2],
                 "task_count": r[3], "ok_count": r[4], "summary": r[5],
-                "at": r[6],
+                "at": r[6], "orphaned": bool(r[7]),
             }
             for r in (rows or [])
         ]
