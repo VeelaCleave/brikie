@@ -48,6 +48,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from brikie.bricks.tool.base import ToolBrick
@@ -97,6 +98,17 @@ _ROLE_PROMPTS: Dict[str, str] = {
     ),
 }
 _DEFAULT_ROLE = "generalist"
+
+
+@dataclass
+class _SwarmTask:
+    """One normalized task in a dispatch (with its id + dependencies)."""
+
+    index: int
+    role: str
+    task: str
+    id: str
+    depends_on: List[str] = field(default_factory=list)
 
 # Collaboration tools handed ONLY to sub-agents (never at the top level), so
 # they can talk to each other without being able to dispatch a sub-swarm.
@@ -185,6 +197,15 @@ class SwarmToolBrick(ToolBrick):
                                     "task": {
                                         "type": "string",
                                         "description": "A self-contained description of what this sub-agent must do. It does NOT see your conversation — include all needed detail.",
+                                    },
+                                    "id": {
+                                        "type": "string",
+                                        "description": "Optional short id for this task, so others can depend on it.",
+                                    },
+                                    "depends_on": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "description": "Ids of tasks that must finish first; this task runs after them and receives their outputs. Use for pipelines (e.g. a coder that depends on a researcher's findings).",
                                     },
                                 },
                                 "required": ["task"],
@@ -348,6 +369,12 @@ class SwarmToolBrick(ToolBrick):
         if len(tasks) > self._max_tasks:
             return {"error": f"too many tasks ({len(tasks)}); the fan-out cap is {self._max_tasks}."}
 
+        # Dependency-ordered scheduling: a dependent task runs only after its
+        # prerequisites finish (and receives their output) — no inbox race.
+        waves, plan_error = self._plan_waves(tasks)
+        if plan_error:
+            return {"error": plan_error}
+
         provider = self._first_provider()
         if provider is None:
             return {"error": "no provider available — cannot run sub-agents."}
@@ -356,17 +383,20 @@ class SwarmToolBrick(ToolBrick):
         goal = await self._active_goal()
         do_review = bool(args.get("review", self._auto_review))
 
-        # A shared blackboard only when there is more than one collaborator.
-        board = SwarmBlackboard() if len(tasks) > 1 else None
+        # A shared blackboard only when more than one collaborator runs in the
+        # SAME wave (cross-wave data flows via dependency outputs instead).
+        has_parallel = any(len(w) > 1 for w in waves)
+        board = SwarmBlackboard() if has_parallel else None
         briefing = self._build_briefing(shared, goal, collaborate=board is not None)
 
         base_schemas = self._subagent_tool_schemas()
         sub_schemas = base_schemas + (_MESSAGING_TOOLS if board else [])
 
         run_id = await self._store.start_run(goal or shared, len(tasks))
-        roles_summary = ", ".join(role for role, _ in tasks)
+        roles_summary = ", ".join(t.role for t in tasks)
+        wave_note = f" in {len(waves)} wave(s)" if len(waves) > 1 else ""
         await self._log_goal("swarm.dispatch",
-                             f"delegated {len(tasks)} task(s) to: {roles_summary}")
+                             f"delegated {len(tasks)} task(s){wave_note} to: {roles_summary}")
 
         # Shared across the whole dispatch: a token ceiling and a live event
         # sink so the user watches sub-agents work instead of staring at
@@ -379,32 +409,46 @@ class SwarmToolBrick(ToolBrick):
         repo_root = Path(self._workspace_root or Path.cwd())
         workspaces: Dict[int, Any] = {}        # task index → Workspace (coders)
 
-        runners_and_tasks = []
-        for i, (role, task_text) in enumerate(tasks):
-            sender = f"{role}#{i + 1}"
-            workspace_tool, iso_note = await self._provision_coder(
-                role, sender, repo_root, workspaces, i)
-            execute_tool = self._make_tool_executor(
-                board=board, sender=sender, workspace_tool=workspace_tool)
-            runner = SubAgentRunner(
-                provider=provider,
-                tool_schemas=sub_schemas,
-                execute_tool=execute_tool,
-                hooks=self._hooks,
-                max_steps=self._max_steps,
-                context_budget=self._context_budget,
-                label=role,
-                on_event=sink,
-                budget=budget,
-            )
-            body = iso_note + task_text
-            full_task = f"{briefing}{body}" if briefing else body
-            runners_and_tasks.append((runner, self._role_prompt(role), full_task))
+        # Provision coder workspaces up front (worktrees at HEAD).
+        provisioned: Dict[int, tuple] = {}
+        for t in tasks:
+            provisioned[t.index] = await self._provision_coder(
+                t.role, f"{t.role}#{t.index + 1}", repo_root, workspaces, t.index)
 
-        logger.info("Swarm %s dispatching %d sub-agent(s).", run_id, len(tasks))
-        results = await run_swarm(runners_and_tasks,
-                                  max_parallel=self._max_parallel,
-                                  timeout=self._subagent_timeout)
+        logger.info("Swarm %s dispatching %d sub-agent(s) across %d wave(s).",
+                    run_id, len(tasks), len(waves))
+        results: List[Any] = [None] * len(tasks)
+        for w, wave in enumerate(waves):
+            if len(waves) > 1:
+                await sink({"kind": "wave", "role": "swarm",
+                            "text": f"wave {w + 1}/{len(waves)}: "
+                                    + ", ".join(tasks[i].id for i in wave)})
+            runners_and_tasks = []
+            for idx in wave:
+                t = tasks[idx]
+                sender = f"{t.role}#{idx + 1}"
+                workspace_tool, iso_note = provisioned[idx]
+                execute_tool = self._make_tool_executor(
+                    board=board, sender=sender, workspace_tool=workspace_tool)
+                runner = SubAgentRunner(
+                    provider=provider,
+                    tool_schemas=sub_schemas,
+                    execute_tool=execute_tool,
+                    hooks=self._hooks,
+                    max_steps=self._max_steps,
+                    context_budget=self._context_budget,
+                    label=t.role,
+                    on_event=sink,
+                    budget=budget,
+                )
+                body = iso_note + self._dep_section(t, tasks, results) + t.task
+                full_task = f"{briefing}{body}" if briefing else body
+                runners_and_tasks.append((runner, self._role_prompt(t.role), full_task))
+            wave_results = await run_swarm(
+                runners_and_tasks, max_parallel=self._max_parallel,
+                timeout=self._subagent_timeout)
+            for idx, res in zip(wave, wave_results):
+                results[idx] = res
 
         # Capture each isolated coder's patch BEFORE review (so the reviewer
         # judges the actual diff) and before it's applied.
@@ -722,24 +766,90 @@ class SwarmToolBrick(ToolBrick):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _normalize_tasks(self, raw_tasks: List[Any]) -> List[tuple]:
-        """Validate/clean the task list into [(role, task), ...]."""
+    def _normalize_tasks(self, raw_tasks: List[Any]) -> List[_SwarmTask]:
+        """Validate/clean the raw task list into _SwarmTask objects.
+
+        Each task gets a stable id (its given ``id`` or ``t<index>``) and an
+        optional ``depends_on`` list of other task ids — the basis for
+        dependency-ordered scheduling.
+        """
         valid_roles = self._role_prompts()
-        out: List[tuple] = []
+        out: List[_SwarmTask] = []
         for item in raw_tasks:
             if isinstance(item, dict):
                 task_text = str(item.get("task", "")).strip()
                 role = str(item.get("role", "") or "").strip().lower()
+                tid = str(item.get("id", "") or "").strip()
+                deps_raw = item.get("depends_on") or item.get("after") or []
+                depends_on = [str(d).strip() for d in deps_raw
+                              if str(d).strip()] if isinstance(deps_raw, list) else []
             elif isinstance(item, str):
-                task_text, role = item.strip(), ""
+                task_text, role, tid, depends_on = item.strip(), "", "", []
             else:
                 continue
             if not task_text:
                 continue
             if role not in valid_roles:
                 role = _DEFAULT_ROLE
-            out.append((role, task_text))
+            idx = len(out)
+            out.append(_SwarmTask(
+                index=idx, role=role, task=task_text,
+                id=tid or f"t{idx}", depends_on=depends_on,
+            ))
         return out
+
+    @staticmethod
+    def _plan_waves(tasks: List[_SwarmTask]) -> tuple:
+        """Topologically order tasks into concurrency waves.
+
+        Returns (waves, error). ``waves`` is a list of lists of task indices:
+        every task in wave N depends only on tasks in waves < N, so a
+        dependent never starts before — or races — its prerequisite. Returns
+        an error string for an unknown dependency id or a dependency cycle.
+        """
+        id_to_index = {t.id: t.index for t in tasks}
+        # Resolve dep ids → indices; reject unknown references.
+        deps: Dict[int, set] = {}
+        for t in tasks:
+            resolved = set()
+            for dep in t.depends_on:
+                if dep == t.id:
+                    return [], f"task '{t.id}' cannot depend on itself."
+                if dep not in id_to_index:
+                    return [], f"task '{t.id}' depends on unknown id '{dep}'."
+                resolved.add(id_to_index[dep])
+            deps[t.index] = resolved
+
+        waves: List[List[int]] = []
+        done: set = set()
+        remaining = set(range(len(tasks)))
+        while remaining:
+            ready = sorted(i for i in remaining if deps[i] <= done)
+            if not ready:
+                stuck = ", ".join(tasks[i].id for i in sorted(remaining))
+                return [], f"dependency cycle among tasks: {stuck}."
+            waves.append(ready)
+            done |= set(ready)
+            remaining -= set(ready)
+        return waves, ""
+
+    @staticmethod
+    def _dep_section(task: _SwarmTask, tasks: List[_SwarmTask],
+                     results: List[Any]) -> str:
+        """The prerequisite outputs injected into a dependent task's prompt."""
+        if not task.depends_on:
+            return ""
+        id_to_index = {t.id: t.index for t in tasks}
+        blocks = []
+        for dep in task.depends_on:
+            di = id_to_index.get(dep)
+            r = results[di] if di is not None else None
+            if r is not None:
+                blocks.append(f"### Output from '{dep}' ({r.role}):\n{r.report}")
+        if not blocks:
+            return ""
+        return ("Outputs from the sub-agents you depend on (already complete):\n\n"
+                + "\n\n".join(blocks) + "\n\n---\n\n")
 
     @staticmethod
     def _build_briefing(shared: str, goal: str, collaborate: bool = False) -> str:

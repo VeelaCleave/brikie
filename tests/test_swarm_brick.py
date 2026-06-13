@@ -123,12 +123,13 @@ class TestRoles:
     async def test_unknown_role_falls_back_to_generalist(self, tmp_path):
         brick, *_ = await _make_brick(tmp_path)
         tasks = brick._normalize_tasks([{"role": "wizard", "task": "x"}])
-        assert tasks == [("generalist", "x")]
+        assert [(t.role, t.task) for t in tasks] == [("generalist", "x")]
         await brick.shutdown()
 
     async def test_bare_string_task_allowed(self, tmp_path):
         brick, *_ = await _make_brick(tmp_path)
-        assert brick._normalize_tasks(["just do this"]) == [("generalist", "just do this")]
+        tasks = brick._normalize_tasks(["just do this"])
+        assert [(t.role, t.task) for t in tasks] == [("generalist", "just do this")]
         await brick.shutdown()
 
 
@@ -235,7 +236,8 @@ class TestSoulRoles:
         roles = brick._swarm_roles()
         assert "mason" in roles["soul_roles"]
         assert "mason" in roles["roles"]
-        assert brick._normalize_tasks([{"role": "mason", "task": "x"}]) == [("mason", "x")]
+        nt = brick._normalize_tasks([{"role": "mason", "task": "x"}])
+        assert [(t.role, t.task) for t in nt] == [("mason", "x")]
         assert "Mason" in brick._role_prompt("mason")
         await brick.shutdown()
 
@@ -313,6 +315,82 @@ class TestReviseLoop:
         assert r["review_ok"] is False
         assert r.get("revisions") == 2         # exactly the budget, no more
         assert prov.coder_runs == 3            # original + 2 revisions
+        await brick.shutdown()
+
+
+class TestDependencyOrdering:
+    async def test_wave_planning_orders_by_dependency(self, tmp_path):
+        brick, *_ = await _make_brick(tmp_path)
+        tasks = brick._normalize_tasks([
+            {"id": "a", "task": "first"},
+            {"id": "b", "task": "after a", "depends_on": ["a"]},
+            {"id": "c", "task": "after b", "depends_on": ["b"]},
+            {"id": "d", "task": "also after a", "depends_on": ["a"]},
+        ])
+        waves, err = brick._plan_waves(tasks)
+        assert err == ""
+        # a alone, then {b,d}, then c.
+        assert waves[0] == [0]
+        assert set(waves[1]) == {1, 3}
+        assert waves[2] == [2]
+        await brick.shutdown()
+
+    async def test_unknown_dependency_errors(self, tmp_path):
+        brick, *_ = await _make_brick(tmp_path)
+        tasks = brick._normalize_tasks([{"id": "a", "task": "x", "depends_on": ["ghost"]}])
+        _waves, err = brick._plan_waves(tasks)
+        assert "unknown id 'ghost'" in err
+        await brick.shutdown()
+
+    async def test_cycle_detected(self, tmp_path):
+        brick, *_ = await _make_brick(tmp_path)
+        tasks = brick._normalize_tasks([
+            {"id": "a", "task": "x", "depends_on": ["b"]},
+            {"id": "b", "task": "y", "depends_on": ["a"]},
+        ])
+        _waves, err = brick._plan_waves(tasks)
+        assert "cycle" in err
+        await brick.shutdown()
+
+    async def test_dispatch_rejects_cycle(self, tmp_path):
+        brick, *_ = await _make_brick(tmp_path)
+        out = await brick.execute("swarm_dispatch", {"tasks": [
+            {"id": "a", "task": "x", "depends_on": ["b"]},
+            {"id": "b", "task": "y", "depends_on": ["a"]},
+        ]})
+        assert "error" in out and "cycle" in out["error"]
+        await brick.shutdown()
+
+    async def test_dependent_receives_prerequisite_output(self, tmp_path):
+        # The race-killer: a dependent must SEE its prerequisite's report,
+        # deterministically — because it runs in a later wave.
+        captured = {}
+
+        class CapProvider:
+            name = "cap"
+            async def get_completion(self, messages, tools):
+                user = messages[1]["content"]
+                if "produce the codeword" in user:
+                    return ("The codeword is MANGO. TASK COMPLETE", [], {})
+                # dependent task: record what it was given
+                captured["dependent_prompt"] = user
+                return ("Used it. TASK COMPLETE", [], {})
+
+        brick, *_ = await _make_brick(tmp_path, provider=CapProvider())
+        out = await brick.execute("swarm_dispatch", {
+            "tasks": [
+                {"id": "src", "role": "researcher",
+                 "task": "produce the codeword"},
+                {"id": "dst", "role": "generalist",
+                 "task": "use the codeword from the previous step",
+                 "depends_on": ["src"]},
+            ],
+            "review": False,
+        })
+        assert all(r["ok"] for r in out["results"])
+        # The dependent's prompt literally contains the prerequisite's output.
+        assert "MANGO" in captured["dependent_prompt"]
+        assert "Output from 'src'" in captured["dependent_prompt"]
         await brick.shutdown()
 
 
