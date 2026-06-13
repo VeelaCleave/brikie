@@ -114,8 +114,13 @@ class VersionedConnectionPool:
     async def _get_schema_version(self, conn: aiosqlite.Connection) -> int:
         """Read the current schema version from the DB."""
         try:
+            # Order by version, not applied_at: the highest applied version
+            # IS the current schema. applied_at ties at millisecond
+            # resolution (detect+migrate land in the same ms), and a tie there
+            # would non-deterministically read an OLD version and re-run a
+            # migration — e.g. ALTER ADD COLUMN → "duplicate column".
             row = await conn.execute_fetchall(
-                "SELECT version FROM _schema_version ORDER BY applied_at DESC LIMIT 1"
+                "SELECT version FROM _schema_version ORDER BY version DESC LIMIT 1"
             )
             if row:
                 return row[0][0]

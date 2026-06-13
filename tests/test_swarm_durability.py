@@ -43,6 +43,20 @@ class TestOrphanReconcile:
         assert await s2.reconcile_orphans() == 0
         await s2.shutdown()
 
+    async def test_reopen_does_not_remigrate(self, tmp_path):
+        # Regression: a v2 migration (ADD COLUMN) must run exactly once. The
+        # version reader used to tie on applied_at and re-run it → "duplicate
+        # column name: orphaned". Reopening the same db must just work.
+        db = str(tmp_path / "swarm.db")
+        for _ in range(4):
+            s = SwarmStore(db)
+            await s.initialize()            # would raise on a re-run migration
+            await s.shutdown()
+        s = SwarmStore(db)
+        await s.initialize()
+        assert await s.reconcile_orphans() == 0
+        await s.shutdown()
+
     async def test_finished_run_not_orphaned(self, tmp_path):
         s = SwarmStore(str(tmp_path / "swarm.db"))
         await s.initialize()

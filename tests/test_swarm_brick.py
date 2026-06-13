@@ -247,6 +247,23 @@ class TestSoulRoles:
         assert "EVIL OVERRIDE" not in brick._role_prompt("coder")
         await brick.shutdown()
 
+    async def test_soul_behavioral_constraints_honored(self, tmp_path):
+        brick, *_ = await _make_brick(tmp_path)
+        soul = FakeSoul("mason", "Build precisely.")
+        soul.behavioral_constraints = {"max_steps": 3, "allowed_tools": ["read_file"]}
+        brick.set_souls({"mason": soul})
+        # Step budget comes from the soul, not the brick default.
+        assert brick._role_max_steps("mason") == 3
+        assert brick._role_max_steps("coder") == brick._max_steps   # builtin unaffected
+        # Tool schemas are filtered to the soul's allow-list.
+        schemas = [{"function": {"name": "read_file"}},
+                   {"function": {"name": "bash_execute"}}]
+        filtered = brick._role_tool_schemas("mason", schemas)
+        assert [s["function"]["name"] for s in filtered] == ["read_file"]
+        # A role with no constraints is left untouched.
+        assert brick._role_tool_schemas("coder", schemas) == schemas
+        await brick.shutdown()
+
 
 class ReviseProvider:
     """Reviewer FAILs the first pass then PASSes; coder reports each attempt.

@@ -286,8 +286,10 @@ class SwarmToolBrick(ToolBrick):
         # hang the swarm. A swarm-wide token ceiling (0 = unlimited).
         self._subagent_timeout = subagent_timeout
         self._max_total_tokens = max_total_tokens
-        # role -> system prompt, contributed by loaded souls (set_souls).
+        # role -> system prompt, and role -> behavioral_constraints,
+        # contributed by loaded souls (set_souls).
         self._soul_roles: Dict[str, str] = {}
+        self._soul_constraints: Dict[str, dict] = {}
 
     @property
     def name(self) -> str:
@@ -323,6 +325,9 @@ class SwarmToolBrick(ToolBrick):
             key = str(soul_name).strip().lower()
             if key and prompt and key not in _ROLE_PROMPTS:
                 self._soul_roles[key] = prompt
+                bc = getattr(soul, "behavioral_constraints", None)
+                if isinstance(bc, dict):
+                    self._soul_constraints[key] = bc
         if self._soul_roles:
             logger.info("Swarm gained %d soul role(s): %s",
                         len(self._soul_roles), ", ".join(self._soul_roles))
@@ -346,6 +351,24 @@ class SwarmToolBrick(ToolBrick):
 
     def _role_prompt(self, role: str) -> str:
         return self._role_prompts().get(role, _ROLE_PROMPTS[_DEFAULT_ROLE])
+
+    def _role_max_steps(self, role: str) -> int:
+        """A soul role's step budget honours its behavioral_constraints."""
+        ms = (self._soul_constraints.get(role) or {}).get("max_steps")
+        try:
+            return int(ms) if ms else self._max_steps
+        except (TypeError, ValueError):
+            return self._max_steps
+
+    def _role_tool_schemas(self, role: str,
+                           schemas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Restrict a soul role's tools to its ``allowed_tools`` constraint, if any."""
+        allowed = (self._soul_constraints.get(role) or {}).get("allowed_tools")
+        if not allowed:
+            return schemas
+        allow = set(allowed)
+        return [s for s in schemas
+                if s.get("function", {}).get("name") in allow]
 
     def _swarm_roles(self) -> Dict[str, Any]:
         roles = self._role_prompts()
@@ -441,10 +464,10 @@ class SwarmToolBrick(ToolBrick):
                     board=board, sender=sender, workspace_tool=workspace_tool)
                 runner = SubAgentRunner(
                     provider=provider,
-                    tool_schemas=sub_schemas,
+                    tool_schemas=self._role_tool_schemas(t.role, sub_schemas),
                     execute_tool=execute_tool,
                     hooks=self._hooks,
-                    max_steps=self._max_steps,
+                    max_steps=self._role_max_steps(t.role),
                     context_budget=self._context_budget,
                     label=t.role,
                     on_event=sink,
