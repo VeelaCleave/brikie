@@ -281,12 +281,8 @@ def render_index_html(registry_manifests: list[dict[str, Any]]) -> str:
             "model lives now; you can switch models any time in-app with "
             "<code>/model &lt;id&gt;</code>.</p>"
         ) if radio else ""
-        # A group that is entirely dev bricks hides as a whole.
-        fieldset_class = (
-            ' class="dev-brick"' if all(e.dev for e in entries) else ""
-        )
         groups.append(
-            f'<fieldset{fieldset_class}><legend>{html.escape(group)}</legend>'
+            f'<fieldset><legend>{html.escape(group)}</legend>'
             f'{note}{rows}</fieldset>'
         )
 
@@ -457,16 +453,9 @@ legend { color: var(--soft); font-weight: bold; padding: 0 .6rem; }
 .brick input:checked + .check { background: var(--accent); border-color: var(--soft); }
 .brk { color: var(--accent); font-size: .85rem; }
 .label { font-weight: bold; }
-.brick.dev-brick { display: none; }
-fieldset.dev-brick { display: none; }
-body.devmode .brick.dev-brick { display: grid; }
-body.devmode fieldset.dev-brick { display: block; }
 .devtag { color: var(--muted); font-size: .72rem; font-style: normal;
           border: 1px solid var(--border); border-radius: 3px;
           padding: 0 .3rem; margin-left: .4rem; vertical-align: middle; }
-.devtoggle { float: right; color: var(--muted); font-size: .85rem;
-             cursor: pointer; user-select: none; }
-.devtoggle input { accent-color: var(--accent); }
 .blurb { color: var(--muted); font-size: .88rem; }
 .hint { color: var(--muted); }
 input[type=text] {
@@ -541,9 +530,7 @@ footer {
   </div>
 </div>
 
-<h2 id="picker">build your installer
-  <label class="devtoggle"><input type="checkbox" id="devmode"> dev mode</label>
-</h2>
+<h2 id="picker">build your installer</h2>
 <form id="pickerform">
 %%GROUPS%%
 <p><label>build set name:
@@ -588,16 +575,6 @@ function update() {
 }
 document.getElementById('pickerform').addEventListener('change', update);
 document.getElementById('setname').addEventListener('input', update);
-const devbox = document.getElementById('devmode');
-function applyDev() {
-  document.body.classList.toggle('devmode', devbox.checked);
-}
-devbox.addEventListener('change', applyDev);
-if (window.location.hash === '#dev'
-    || new URLSearchParams(window.location.search).get('dev') === '1') {
-  devbox.checked = true;
-  applyDev();
-}
 document.getElementById('copy').addEventListener('click', () => {
   navigator.clipboard.writeText(document.getElementById('cmd').textContent)
     .then(() => {

@@ -475,16 +475,19 @@ class TestDevBricks:
         assert flags["BRK-500"] is False      # Foreman
         assert flags["BRK-410"] is False      # File Tools
 
-    def test_page_marks_dev_bricks_hidden(self):
+    def test_page_shows_dev_bricks_tagged(self):
         from brikie.server.website import render_index_html
         page = render_index_html([])
-        assert 'class="brick dev-brick"' in page
-        assert "devmode" in page              # the toggle exists
-        # all-dev group hides as a whole fieldset
-        assert '<fieldset class="dev-brick"><legend>Improvement' in page
+        # Dev bricks are shown (no longer hidden) and marked with a "dev" tag.
+        assert ">dev</em>" in page
+        # The dev-mode toggle is gone — dev bricks are tagged, not gated.
+        assert "devmode" not in page
+        assert "devtoggle" not in page
+        # A known dev brick (Diagnostics, BRK-720) renders on the page.
+        assert "Diagnostics" in page
 
     def test_dev_bricks_remain_installable(self):
-        # hidden on the page ≠ forbidden in the generator
+        # dev-tagged on the page ≠ any difference in the generator
         build = generate_buildset(["BRK-300", "BRK-200", "BRK-430"], "x")
         assert any(b["brk"] == "BRK-430" for b in build["bricks"])
 
