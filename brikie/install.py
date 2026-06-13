@@ -88,6 +88,7 @@ CATALOG: Dict[str, List[CatalogEntry]] = {
     ],
     "Improvement Bricks": [
         CatalogEntry("BRK-900", "Auto-Fixer", "Repair malformed tool calls without an LLM round-trip", dev=True),
+        CatalogEntry("BRK-910", "Loop Detector", "Catch tool-call loops and actively realign the agent to its goal", dev=True),
     ],
     "Soul Bricks (needed for /afk)": [
         CatalogEntry("BRK-500", "Foreman", "Site-boss orchestrator: plans, delegates, verifies"),

@@ -111,6 +111,19 @@ committing:
    (An unanchored gitignore once silently dropped the entire Build Set
    system from the repo. Anchor ignore patterns to the root: `/build/`.)
 
+## Operating discipline (what the model actually reads)
+
+This file is the full contract, but it is long and is **not** injected into
+the model's context. The distilled, always-on slice the local model reads
+on every turn lives in `brikie/config/operating_discipline.py` and is
+appended to the system prompt by `_build_provider_messages`. It is a
+**living artifact**: when the reviewer corrects a recurring local-model
+mistake (e.g. "tests pass ≠ done", shipping a lossy shortcut, dropping a
+guardrail), encode the correction *there* — not only in goals.md — so it
+persists into the next run instead of being re-explained forever. Keep it
+tight (it costs tokens every turn) and keep every rule anchored to the real
+failure that earned it. Toggle off per-persona with `BRIKIE_DISCIPLINE=0`.
+
 ## Code standards
 
 - Python 3.11+, asyncio, full type hints. Match the existing style:

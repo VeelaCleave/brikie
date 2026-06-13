@@ -20,6 +20,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
+from brikie.config.operating_discipline import discipline_block
 from brikie.config.types import HookEvent, HookType, Message, ToolCall
 from brikie.kernel.hooks import HookDispatcher
 from brikie.kernel.registry import BrickRegistry, InterfaceBrick, ProviderBrick, ToolBrick
@@ -820,6 +821,14 @@ class EventLoop:
         messages: List[Dict[str, Any]] = []
         if self._system_prompt:
             messages.append({"role": "system", "content": self._system_prompt})
+
+        # Always put the distilled operating contract in front of the model.
+        # The souls say "follow AGENTS.md" but never showed it the rules;
+        # this is the part it must not skip, sourced from a living module we
+        # tweak as new local-model failure patterns surface.
+        discipline = discipline_block()
+        if discipline:
+            messages.append({"role": "system", "content": discipline})
 
         memory_blob = await self._build_memory_blob()
         if memory_blob:
