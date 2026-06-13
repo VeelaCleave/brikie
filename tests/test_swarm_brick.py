@@ -246,6 +246,76 @@ class TestSoulRoles:
         await brick.shutdown()
 
 
+class ReviseProvider:
+    """Reviewer FAILs the first pass then PASSes; coder reports each attempt.
+    State-based so the review→revise→re-review flow is deterministic."""
+
+    name = "revise"
+
+    def __init__(self, pass_on: int = 2) -> None:
+        self.reviews = 0
+        self.coder_runs = 0
+        self._pass_on = pass_on        # which review round first returns PASS
+
+    async def get_completion(self, messages, tools):
+        system = messages[0]["content"]
+        if "Reviewer" in system:
+            self.reviews += 1
+            if self.reviews >= self._pass_on:
+                return ("Looks fixed. REVIEW: PASS", [], {})
+            return ("REVIEW: FAIL — you missed the error path.", [], {})
+        self.coder_runs += 1
+        return (f"Implemented (attempt {self.coder_runs}). TASK COMPLETE", [], {})
+
+
+class TestReviseLoop:
+    async def test_failed_review_triggers_revision_then_passes(self, tmp_path):
+        prov = ReviseProvider(pass_on=2)
+        brick, *_ = await _make_brick(tmp_path, provider=prov)   # max_revisions=1
+        out = await brick.execute("swarm_dispatch", {
+            "tasks": [{"role": "coder", "task": "add a parser"}],
+        })
+        r = out["results"][0]
+        assert r["reviewed"] is True
+        assert r["review_ok"] is True          # the revision fixed it
+        assert r.get("revisions") == 1
+        assert prov.coder_runs == 2            # original + one revision
+        assert prov.reviews == 2               # reviewed twice
+        await brick.shutdown()
+
+    async def test_revisions_disabled_leaves_failure(self, tmp_path):
+        prov = ReviseProvider(pass_on=99)      # reviewer always FAILs
+        reg = FakeRegistry([prov], [])
+        brick = SwarmToolBrick(registry=reg, db_path=str(tmp_path / "s.db"),
+                               isolate_coders=False, max_revisions=0)
+        reg._tools.append(brick)
+        await brick.init()
+        out = await brick.execute("swarm_dispatch", {
+            "tasks": [{"role": "coder", "task": "add a parser"}],
+        })
+        r = out["results"][0]
+        assert r["reviewed"] is True and r["review_ok"] is False
+        assert r.get("revisions", 0) == 0
+        assert prov.coder_runs == 1            # no revision attempted
+        await brick.shutdown()
+
+    async def test_revision_budget_bounds_attempts(self, tmp_path):
+        prov = ReviseProvider(pass_on=99)      # never passes
+        reg = FakeRegistry([prov], [])
+        brick = SwarmToolBrick(registry=reg, db_path=str(tmp_path / "s.db"),
+                               isolate_coders=False, max_revisions=2)
+        reg._tools.append(brick)
+        await brick.init()
+        out = await brick.execute("swarm_dispatch", {
+            "tasks": [{"role": "coder", "task": "x"}],
+        })
+        r = out["results"][0]
+        assert r["review_ok"] is False
+        assert r.get("revisions") == 2         # exactly the budget, no more
+        assert prov.coder_runs == 3            # original + 2 revisions
+        await brick.shutdown()
+
+
 class TestGoalProgress:
     async def test_dispatch_logs_to_active_goal(self, tmp_path):
         goal = GoalCarrier("Ship the swarm")

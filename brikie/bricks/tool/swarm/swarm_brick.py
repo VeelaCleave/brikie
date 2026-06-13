@@ -241,6 +241,7 @@ class SwarmToolBrick(ToolBrick):
         max_total_tokens: int = 0,
         isolate_coders: bool = True,
         workspace_root: Optional[str] = None,
+        max_revisions: int = 1,
     ) -> None:
         super().__init__()
         self._name = "swarm"
@@ -249,6 +250,9 @@ class SwarmToolBrick(ToolBrick):
         # defaults to the process cwd at dispatch time.
         self._isolate_coders = isolate_coders
         self._workspace_root = workspace_root
+        # Phase 3: a failed review feeds back to the coder for up to this many
+        # bounded retry rounds before the result returns as-is.
+        self._max_revisions = max_revisions
         self._registry = registry
         self._hooks = hooks
         self._store = SwarmStore(db_path)
@@ -410,8 +414,8 @@ class SwarmToolBrick(ToolBrick):
                 results[i].workspace_diff = await ws.diff()
 
         if do_review:
-            await self._auto_review_coders(results, provider, base_schemas,
-                                           sink=sink, budget=budget)
+            await self._review_and_revise(results, workspaces, provider,
+                                          base_schemas, sink, budget)
 
         # Reconcile isolated work back into the real tree: apply each
         # successful coder's patch sequentially; an overlapping one is
@@ -450,29 +454,61 @@ class SwarmToolBrick(ToolBrick):
                 out["shared_notes"] = shared_notes
         return out
 
-    async def _auto_review_coders(
+    async def _review_and_revise(
         self,
         results: List[SubAgentResult],
+        workspaces: Dict[int, Any],
         provider: Any,
         base_schemas: List[Dict[str, Any]],
-        sink: Any = None,
-        budget: Any = None,
+        sink: Any,
+        budget: Any,
     ) -> None:
-        """Auto-spawn a reviewer for each successful coder result.
+        """Review every successful coder, then revise the failures (bounded).
 
-        The reviewer inspects the coder's work (it has the same read tools)
-        and returns a PASS/FAIL verdict with specifics, attached to the
-        coder's result. Reviewers don't get the blackboard — they judge a
-        finished artifact, not collaborate.
+        A coder whose review fails is re-run IN ITS OWN WORKSPACE with the
+        reviewer's objections, then re-reviewed — up to ``max_revisions``
+        rounds. So 'REVIEW: FAIL' actually drives a fix instead of being a
+        cosmetic verdict.
         """
-        targets = [
-            (i, r) for i, r in enumerate(results) if r.role == "coder" and r.ok
-        ]
+        targets = [i for i, r in enumerate(results) if r.role == "coder" and r.ok]
         if not targets:
             return
+        await self._review_coders(results, targets, provider, base_schemas,
+                                  sink, budget)
 
+        for _round in range(self._max_revisions):
+            failing = [
+                i for i in targets
+                if results[i].ok and results[i].reviewed and not results[i].review_ok
+            ]
+            if not failing:
+                break
+            await self._revise_coders(results, failing, workspaces, provider,
+                                      base_schemas, sink, budget)
+            # Re-collect each revised coder's diff, then re-review it.
+            for i in failing:
+                ws = workspaces.get(i)
+                if ws is not None and ws.isolated:
+                    results[i].workspace_diff = await ws.diff()
+            await self._review_coders(results, failing, provider, base_schemas,
+                                      sink, budget)
+
+    async def _review_coders(
+        self,
+        results: List[SubAgentResult],
+        indices: List[int],
+        provider: Any,
+        base_schemas: List[Dict[str, Any]],
+        sink: Any,
+        budget: Any,
+    ) -> None:
+        """Review the coder results at *indices* (only those still ok)."""
+        targets = [i for i in indices if results[i].ok]
+        if not targets:
+            return
         review_runners = []
-        for _i, r in targets:
+        for i in targets:
+            r = results[i]
             runner = SubAgentRunner(
                 provider=provider,
                 tool_schemas=base_schemas,
@@ -486,7 +522,6 @@ class SwarmToolBrick(ToolBrick):
             )
             diff_section = ""
             if r.isolated and r.workspace_diff.strip():
-                # The coder worked in isolation; review its actual patch.
                 diff_section = (
                     "\nThe exact changes it made (unified diff), which will be "
                     "applied to the tree if you approve:\n```diff\n"
@@ -506,14 +541,74 @@ class SwarmToolBrick(ToolBrick):
 
         reviews = await run_swarm(review_runners, max_parallel=self._max_parallel,
                                   timeout=self._subagent_timeout)
-        for (idx, _r), rev in zip(targets, reviews):
-            results[idx].reviewed = True
-            results[idx].review = rev.report.strip()
-            results[idx].review_ok = "REVIEW: PASS" in rev.report.upper()
-            # Fold the reviewer's token cost into the reviewed result so the
-            # dispatch total stays honest.
-            results[idx].tokens_in += rev.tokens_in
-            results[idx].tokens_out += rev.tokens_out
+        for i, rev in zip(targets, reviews):
+            results[i].reviewed = True
+            results[i].review = rev.report.strip()
+            results[i].review_ok = "REVIEW: PASS" in rev.report.upper()
+            results[i].tokens_in += rev.tokens_in
+            results[i].tokens_out += rev.tokens_out
+
+    async def _revise_coders(
+        self,
+        results: List[SubAgentResult],
+        indices: List[int],
+        workspaces: Dict[int, Any],
+        provider: Any,
+        base_schemas: List[Dict[str, Any]],
+        sink: Any,
+        budget: Any,
+    ) -> None:
+        """Re-run failing coders with the reviewer's feedback, in-place.
+
+        Each runs in its OWN existing worktree (its prior changes are still
+        there), so it refines rather than starting over. Results are replaced
+        with the revision, carrying forward the cumulative token cost and an
+        incremented revision count.
+        """
+        revise_runners = []
+        for i in indices:
+            r = results[i]
+            ws = workspaces.get(i)
+            workspace_tool = None
+            if ws is not None and ws.isolated:
+                workspace_tool = ShellToolBrick(
+                    root=str(ws.path), allowed_dirs=[str(ws.path)])
+                await workspace_tool.init()
+            runner = SubAgentRunner(
+                provider=provider,
+                tool_schemas=base_schemas,
+                execute_tool=self._make_tool_executor(workspace_tool=workspace_tool),
+                hooks=self._hooks,
+                max_steps=self._max_steps,
+                context_budget=self._context_budget,
+                label="coder",
+                on_event=sink,
+                budget=budget,
+            )
+            revise_task = (
+                "Your previous attempt at this task was reviewed and REJECTED. "
+                "Revise it to fully address the feedback. Your earlier changes "
+                "are already in your workspace — read the files, then fix the "
+                "problems. Use relative paths.\n\n"
+                f"The task:\n{r.task}\n\n"
+                f"Reviewer feedback (what to fix):\n{r.review}\n\n"
+                "Finish with a concise report ending in TASK COMPLETE or "
+                "TASK FAILED: <reason>."
+            )
+            revise_runners.append((runner, _ROLE_PROMPTS["coder"], revise_task))
+            await sink({"kind": "revise", "role": "coder",
+                        "text": f"revising coder#{i + 1} after a failed review"})
+
+        revised = await run_swarm(revise_runners, max_parallel=self._max_parallel,
+                                  timeout=self._subagent_timeout)
+        for i, rev in zip(indices, revised):
+            old = results[i]
+            rev.role = "coder"
+            rev.isolated = old.isolated
+            rev.revisions = old.revisions + 1
+            rev.tokens_in += old.tokens_in        # cumulative dispatch cost
+            rev.tokens_out += old.tokens_out
+            results[i] = rev
 
     # ------------------------------------------------------------------
     # Isolated coder workspaces (Phase 2)

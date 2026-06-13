@@ -91,6 +91,7 @@ class SubAgentResult:
     reviewed: bool = False
     review_ok: bool = False
     review: str = ""
+    revisions: int = 0          # how many review→revise rounds this took
     # Set for an isolated coder (Phase 2): its captured patch and how it
     # landed back in the real tree.
     isolated: bool = False
@@ -116,6 +117,8 @@ class SubAgentResult:
             out["reviewed"] = True
             out["review_ok"] = self.review_ok
             out["review"] = self.review
+            if self.revisions:
+                out["revisions"] = self.revisions
         if self.isolated:
             out["isolated"] = True
             out["workspace_applied"] = self.workspace_applied
