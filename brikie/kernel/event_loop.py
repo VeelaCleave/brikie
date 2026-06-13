@@ -127,7 +127,9 @@ class EventLoop:
         system_prompt: Optional[str] = None,
         souls: Optional[Dict[str, Any]] = None,
         resume: bool = False,
+        interruptible: bool = False,
     ) -> None:
+        import os
         self._registry = registry
         self._state = state
         self._hooks = hooks
@@ -136,10 +138,18 @@ class EventLoop:
         self._system_prompt = system_prompt
         self._souls = souls or {}
         self._resume = resume
+        # Opt-in mid-turn interrupt watcher (#28). Default OFF — the live loop
+        # is unchanged unless enabled here or via BRIKIE_INTERRUPT=1.
+        self._interruptible = interruptible or os.environ.get(
+            "BRIKIE_INTERRUPT", "").strip().lower() in ("1", "true", "yes", "on")
         self._resumed_count = 0
         self._afk_watchers: List[Any] = []
         self._tokens_in = 0
         self._tokens_out = 0
+        # Mid-turn interrupt/steer channel (#28). Inert unless something calls
+        # request_stop()/inject_steer() — so default turn behavior is unchanged.
+        self._steer: List[str] = []
+        self._stop_requested = False
         # Pending get_input() tasks when several interfaces are seated.
         self._input_tasks: Dict[str, asyncio.Task] = {}
         # Prompt token budget — env-overridable for big/small context windows.
@@ -533,7 +543,46 @@ class EventLoop:
             brick_name="event_loop",
         ))
 
-        await self._agent_loop()
+        if self._interruptible:
+            await self._run_agent_interruptible()
+        else:
+            await self._agent_loop()
+
+    async def _run_agent_interruptible(self) -> None:
+        """Run the agent loop while watching for a mid-turn user interrupt.
+
+        The agent runs as a task; a watcher concurrently reads interface input.
+        A stop word (``/stop``) asks the loop to halt cleanly between rounds;
+        anything else is folded in as a steer for the next round. When the
+        agent finishes, the watcher is cancelled. Only active when the loop is
+        constructed ``interruptible`` (off by default — zero change live).
+        """
+        agent = asyncio.create_task(self._agent_loop())
+        watcher = asyncio.create_task(self._watch_for_interrupt(agent))
+        try:
+            await agent
+        finally:
+            watcher.cancel()
+            try:
+                await watcher
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    async def _watch_for_interrupt(self, agent_task: asyncio.Task) -> None:
+        """Read interface input during a turn; route it to stop/steer."""
+        stop_words = {"/stop", "stop", "/cancel", "/halt"}
+        while not agent_task.done():
+            text = await self._capture_input()
+            if not text:
+                continue
+            if text.strip().lower() in stop_words:
+                self.request_stop()
+                await self._emit_info(
+                    "interrupt", "stopping after the current step…")
+            else:
+                self.inject_steer(text)
+                await self._emit_info(
+                    "steer", "noted — I'll fold that into the run.")
 
     async def _handle_command(self, user_text: str) -> bool:
         """Process slash commands. Returns True if the input was a command."""
@@ -668,10 +717,20 @@ class EventLoop:
     async def _agent_loop(self) -> None:
         """Iterate provider calls and tool executions until the model answers."""
         for _step in range(MAX_AGENT_STEPS):
+            # A mid-turn user interrupt: stop the run cleanly between rounds.
+            if self._stop_requested:
+                self._stop_requested = False
+                msg = "⏹ Stopped at your request."
+                self._message_history.append(Message(role="assistant", content=msg))
+                await self._emit_assistant(msg)
+                return
+
             # An improvement brick (e.g. the loop detector) that caught the
             # agent spinning stages a realignment nudge; inject it now so the
             # model reads it on this very round instead of looping again.
             await self._drain_realignments()
+            # A mid-turn user steer: fold new guidance in before the next call.
+            self._drain_steer()
 
             # Re-collect every round, not just per turn: a brick seated by
             # registry_install/registry_create_brick mid-turn must be
@@ -719,6 +778,39 @@ class EventLoop:
         msg = f"Stopped after {MAX_AGENT_STEPS} tool steps without a final answer."
         self._message_history.append(Message(role="assistant", content=msg))
         await self._emit_assistant(msg)
+
+    # ------------------------------------------------------------------
+    # Mid-turn interrupt / steer (#28)
+    # ------------------------------------------------------------------
+
+    def request_stop(self) -> None:
+        """Ask the running agent loop to stop cleanly after the current round.
+
+        Thread/task-safe to call from an interface while a turn is in flight;
+        the loop checks the flag between rounds and exits gracefully (it does
+        not abort a tool call already in progress).
+        """
+        self._stop_requested = True
+
+    def inject_steer(self, text: str) -> None:
+        """Queue a mid-turn user message to fold into the agent's next round.
+
+        Unlike a normal turn (which only starts after the current one ends),
+        this lets the user redirect a long autonomous run without stopping it.
+        """
+        text = (text or "").strip()
+        if text:
+            self._steer.append(text)
+
+    def _drain_steer(self) -> None:
+        """Inject any queued mid-turn steer messages before the next call."""
+        if not self._steer:
+            return
+        pending, self._steer = self._steer, []
+        for text in pending:
+            note = f"[The user interjected mid-task]: {text}"
+            self._message_history.append(Message(role="user", content=note))
+            logger.info("Injected mid-turn steer: %s", text)
 
     async def _drain_realignments(self) -> None:
         """Inject pending realignment nudges from improvement bricks.
