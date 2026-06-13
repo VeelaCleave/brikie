@@ -97,7 +97,12 @@ def run_onboarding(sets_dir: Path) -> None:
         preset = options[0]
 
     model = _pick_model(console, preset, local.get(preset.name, []))
-    api_key = _pick_key(console, preset, env_keys)
+    if preset.auth == "oauth":
+        # Sign-in-with-ChatGPT: pick it, click the link, you're in. No key.
+        api_key = None
+        _do_oauth_login(console)
+    else:
+        api_key = _pick_key(console, preset, env_keys)
 
     config = preset_config(preset, model)
     if api_key is not None:
@@ -124,6 +129,32 @@ def run_config(sets_dir: Path) -> int:
     except (KeyboardInterrupt, EOFError):
         print("\nconfig cancelled.")
         return 130
+
+
+def _do_oauth_login(console: Console) -> None:
+    """Run the ChatGPT sign-in flow inline: open a link, wait, done."""
+    import asyncio
+
+    from brikie.auth.openai_oauth import (
+        OAuthError,
+        load_tokens,
+        run_login_flow,
+    )
+
+    if load_tokens() is not None:
+        console.print("  [green]● already signed in to OpenAI[/] "
+                      "[dim](re-run `brikie login openai` to switch accounts)[/]")
+        return
+    console.print("  [dim]opening your browser to sign in with ChatGPT…[/]")
+    try:
+        asyncio.run(run_login_flow())
+        console.print("  [green]✓ signed in with ChatGPT[/]")
+    except OAuthError as exc:
+        console.print(f"  [yellow]sign-in didn't finish: {exc}[/]")
+        console.print("  [dim]you can retry any time with `brikie login openai`[/]")
+    except KeyboardInterrupt:
+        console.print("  [yellow]sign-in cancelled[/] "
+                      "[dim](retry with `brikie login openai`)[/]")
 
 
 def _connect_chat(console: Console, sets_dir: Path) -> None:

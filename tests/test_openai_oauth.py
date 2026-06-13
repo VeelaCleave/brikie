@@ -54,12 +54,13 @@ class FakeHTTP:
 
 
 class TestClientId:
-    def test_missing_client_id_is_actionable(self, monkeypatch):
+    def test_bundled_default_when_env_unset(self, monkeypatch):
+        # Zero-config: a working client ships by default (no setup required).
         monkeypatch.delenv(_CID, raising=False)
-        with pytest.raises(oa.OAuthError):
-            oa.client_id()
+        assert oa.client_id() == oa._DEFAULT_CLIENT_ID
+        assert oa.client_id()                       # non-empty
 
-    def test_client_id_from_env(self, monkeypatch):
+    def test_env_overrides_default(self, monkeypatch):
         monkeypatch.setenv(_CID, "brikie_app_123")
         assert oa.client_id() == "brikie_app_123"
 
@@ -174,6 +175,37 @@ class TestSource:
         monkeypatch.setattr(oa, "BRIKIE_AUTH_PATH", tmp_path / "none.json")
         with pytest.raises(oa.OAuthError):
             await oa.OpenAIOAuthSource().headers()
+
+
+class TestOnboardingOneClick:
+    def test_login_launched_when_not_signed_in(self, monkeypatch):
+        import brikie.onboard as ob
+        from rich.console import Console
+        called = {"flow": 0}
+
+        async def fake_flow():
+            called["flow"] += 1
+        monkeypatch.setattr(oa, "run_login_flow", fake_flow)
+        monkeypatch.setattr(oa, "load_tokens", lambda: None)
+        ob._do_oauth_login(Console())
+        assert called["flow"] == 1                 # picking the provider = sign in
+
+    def test_login_skipped_when_already_signed_in(self, monkeypatch):
+        import brikie.onboard as ob
+        from rich.console import Console
+        called = {"flow": 0}
+
+        async def fake_flow():
+            called["flow"] += 1
+        monkeypatch.setattr(oa, "run_login_flow", fake_flow)
+        monkeypatch.setattr(oa, "load_tokens",
+                            lambda: oa.OAuthTokens(access_token="x"))
+        ob._do_oauth_login(Console())
+        assert called["flow"] == 0                 # no second login
+
+    def test_oauth_preset_selects_oauth_login(self):
+        from brikie.config.provider_presets import PRESETS
+        assert PRESETS["openai-oauth"].auth == "oauth"   # onboarding branches on this
 
 
 class TestProviderIntegration:

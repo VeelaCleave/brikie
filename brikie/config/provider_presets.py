@@ -74,7 +74,7 @@ PRESETS: dict[str, ProviderPreset] = {
             base_url="https://api.openai.com/v1",
             api_format="openai", default_model="gpt-5.5",
             key_env=None, probe_url=None,
-            blurb="Sign in with your ChatGPT account — run `brikie login openai`",
+            blurb="Sign in with your ChatGPT account — no API key, just click a link",
             base_url_env="OPENAI_BASE_URL", auth="oauth",
         ),
         ProviderPreset(

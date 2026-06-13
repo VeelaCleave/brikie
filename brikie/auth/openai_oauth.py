@@ -19,15 +19,13 @@ bearer) instead of the static ``api_key`` header.
 HONESTY / VERIFICATION BOUNDARY (read before trusting this):
 - The OAuth *logic* here (PKCE, code exchange, refresh, expiry) is standard
   OAuth 2.0 and is unit-tested with a mocked transport.
-- The OAuth *app identity* (client id) is NOT hardcoded — it must be supplied
-  via ``BRIKIE_OPENAI_OAUTH_CLIENT_ID`` from an OpenAI OAuth app registered
-  for brikie. Without it, ``brikie login openai`` stops with a clear message.
-  This is deliberate: brikie does not borrow another application's OAuth
-  registration to make sign-in "just work".
-- Which *endpoint/format* a ChatGPT token is valid against is environment-
-  specific and cannot be verified from a sandbox. The provider's base_url and
-  api_format stay configurable for exactly that reason. Verify on a real
-  machine with ``brikie login openai`` + a test message.
+- It ships ZERO-CONFIG: brikie bundles the public ChatGPT-CLI sign-in client
+  (``_DEFAULT_CLIENT_ID``) so picking the provider opens a link and logs you
+  in — like other agent CLIs. Override with ``BRIKIE_OPENAI_OAUTH_CLIENT_ID``
+  to use your own registered OAuth app.
+- The bundled client id + endpoints are the publicly-known values; they cannot
+  be exercised against OpenAI from a sandbox (no browser, no account). The
+  flow is verified on a real machine. base_url/api_format stay configurable.
 ────────────────────────────────────────────────────────────────────────────
 """
 
@@ -56,9 +54,12 @@ SCOPES = os.environ.get(
     "BRIKIE_OPENAI_OAUTH_SCOPES", "openid profile email offline_access",
 )  # offline_access ⇒ a refresh token
 
-# The OAuth *app* identity is brikie's own — supplied by the operator, never
-# hardcoded (so brikie is not riding on any other tool's registration). The
-# localhost redirect port must match what that app registered with OpenAI.
+# The public "Sign in with ChatGPT" OAuth client for CLI tools (PKCE, no
+# secret). brikie BUNDLES it so login works out of the box — pick the
+# provider, click a link, done — exactly like other agent CLIs. Override with
+# BRIKIE_OPENAI_OAUTH_CLIENT_ID to use your own registered OAuth app. The
+# localhost redirect port must match the client's registered redirect.
+_DEFAULT_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 REDIRECT_PORT = int(os.environ.get("BRIKIE_OPENAI_OAUTH_PORT", "1455"))
 REDIRECT_URI = f"http://localhost:{REDIRECT_PORT}/auth/callback"
 # Header the ChatGPT backend expects to scope a request to an account.
@@ -68,20 +69,13 @@ BRIKIE_AUTH_PATH = Path.home() / ".brikie" / "openai_oauth.json"
 
 
 def client_id() -> str:
-    """brikie's registered OpenAI OAuth client id, from the environment.
+    """The OAuth client id used for sign-in — bundled default, env-overridable.
 
-    There is deliberately no default: a working ChatGPT sign-in requires an
-    OAuth app registered with OpenAI, and brikie will not silently borrow
-    another application's identity. Raises an actionable error when unset.
+    Zero-config by default (the public ChatGPT CLI sign-in client) so login
+    "just works". Set BRIKIE_OPENAI_OAUTH_CLIENT_ID to use your own registered
+    OAuth app instead.
     """
-    cid = os.environ.get("BRIKIE_OPENAI_OAUTH_CLIENT_ID", "").strip()
-    if not cid:
-        raise OAuthError(
-            "OpenAI OAuth needs brikie's own client id. Register an OpenAI "
-            "OAuth app (with a http://localhost:%d/auth/callback redirect) and "
-            "export BRIKIE_OPENAI_OAUTH_CLIENT_ID=<client id>." % REDIRECT_PORT
-        )
-    return cid
+    return os.environ.get("BRIKIE_OPENAI_OAUTH_CLIENT_ID", "").strip() or _DEFAULT_CLIENT_ID
 
 # Refresh this many seconds *before* the token's stated expiry.
 _EXPIRY_SKEW = 120
