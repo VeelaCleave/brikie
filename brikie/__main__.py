@@ -132,7 +132,7 @@ async def main() -> None:
         summarize_quarantine,
     )
 
-    loader = BuildLoader(registry)
+    loader = BuildLoader(registry, hooks=hooks)
     build = None
     loaded_path = set_path
     try:

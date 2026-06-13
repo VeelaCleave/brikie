@@ -41,6 +41,7 @@ BRICK_INDEX: Dict[str, str] = {
     "BRK-440": "brikie.bricks.tool.mcp_client.MCPClientBrick",
     "BRK-450": "brikie.bricks.registry.installer.RegistryInstallerBrick",
     "BRK-460": "brikie.bricks.tool.goals.goal_brick.GoalBrick",
+    "BRK-470": "brikie.bricks.tool.swarm.swarm_brick.SwarmToolBrick",
 
     # ── Soul Bricks (500-599) ─────────────────────────────────────────
     "BRK-500": "brikie.bricks.soul.foreman.Foreman",
@@ -111,8 +112,12 @@ class BuildLoader:
         # All bricks in the set are now registered and ready for warm-up.
     """
 
-    def __init__(self, registry: BrickRegistry) -> None:
+    def __init__(self, registry: BrickRegistry, hooks: Any = None) -> None:
         self._registry = registry
+        # Optional: the HookDispatcher. A brick that declares ``hooks`` in
+        # its constructor (e.g. the Swarm brick, which dispatches PRE_TOOL
+        # for its sub-agents) gets it auto-injected, just like ``registry``.
+        self._hooks = hooks
 
     def load(self, path: str | Path, resilient: bool = False) -> BuildSet:
         """Load a Build Set JSON and register all its bricks.
@@ -241,6 +246,12 @@ class BuildLoader:
             sig = inspect.signature(brick_cls.__init__)
             if "registry" in sig.parameters and "registry" not in init_kwargs:
                 init_kwargs["registry"] = self._registry
+            if (
+                self._hooks is not None
+                and "hooks" in sig.parameters
+                and "hooks" not in init_kwargs
+            ):
+                init_kwargs["hooks"] = self._hooks
         except (ValueError, TypeError):
             pass
 

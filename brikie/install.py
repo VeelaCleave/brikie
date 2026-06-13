@@ -71,6 +71,7 @@ CATALOG: Dict[str, List[CatalogEntry]] = {
         CatalogEntry("BRK-440", "MCP Client", "Connect any Model Context Protocol server\u2019s tools to your agent"),
         CatalogEntry("BRK-450", "Registry Installer", "Fetch and install bricks from the central registry"),
         CatalogEntry("BRK-460", "Goals", "Long-running goals that persist across sessions (/goal)"),
+        CatalogEntry("BRK-470", "Swarm", "Delegate scoped subtasks to parallel, role-based sub-agents", dev=True),
     ],
     "Memory Bricks": [
         CatalogEntry("BRK-600", "Lossless Context (LCM)", "SQLite immutable store + DAG compaction"),
